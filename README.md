@@ -1,6 +1,8 @@
-# TRFL
+# Trfl — LURKER
 
-Native read-only Android 4chan MVP: Kotlin, Compose and Material 3, edge-to-edge system bars, dynamic light/dark theme.
+**v1.0.0 · Read-only 4chan reader for Android.**
+
+Full board access, including optional adult boards. Browse, watch and save; no posting or CAPTCHA. Built with Kotlin, Compose and Material 3, edge-to-edge system bars, and light/dark themes.
 
 ## Included
 
@@ -37,12 +39,6 @@ The smoke script uses live `/g/` content and adds a favorite, watched thread and
 
 `tools/install-phone.py` is an explicit worker deployment command: checks the expected hardware serial, builds/tests, installs without clearing app data, verifies the installed APK SHA-256 against the exact source build, then launches TRFL. Phone installs use the optimized, resource-shrunk, non-debuggable release build rather than the slower Compose debug build. Release is signed with the existing local debug certificate to preserve in-place updates and app data; this is not store distribution signing. Debug builds remain available for development. It never pairs, searches for devices or starts a VM. The source commit is visible in Settings.
 
-
-## Play-only build (not publication-ready)
-
-`./gradlew :app:bundlePlay :app:lintPlay :app:testPlayUnitTest` creates an **unsigned** optimized Play bundle under `app/build/outputs/bundle/play/`. Secure upload signing and Play Console setup remain required. Its application ID is `org.trfl.app.play`, separate from sideloaded `org.trfl.app`, so adult preferences, caches and saved media are not inherited. The existing phone deployment still uses the unrestricted release variant.
-
-The Play variant has no adult-board setting. A fail-closed allowlist based on the official `ws_board` classification restricts directory entries, deep links, API/cache access, watched/saved entries and offline thread loading. New boards require an explicit allowlist review; directory entries must also retain their safe flag. This removes adult boards, **not all potentially objectionable posts on safe boards**. UGC moderation/reporting/blocking, privacy disclosures, age rating and other Play requirements still need review; this build does not imply Play approval.
 
 ## MVP limits
 

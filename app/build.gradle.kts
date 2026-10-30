@@ -7,7 +7,7 @@ android {
     namespace = "org.trfl.app"
     compileSdk = 35
     defaultConfig {
-        applicationId = "org.trfl.app"; minSdk = 26; targetSdk = 35; versionCode = 71; versionName = "0.5.45"
+        applicationId = "org.trfl.app"; minSdk = 26; targetSdk = 35; versionCode = 100; versionName = "1.0.0"
         buildConfigField("boolean", "SFW_ONLY", "false")
         buildConfigField("String", "COMMIT", "\"${providers.gradleProperty("trflCommit").getOrElse("development")}\"")
     }
@@ -19,14 +19,6 @@ android {
             // Local phone distribution: keep the existing debug certificate so updates
             // preserve installed data. This is not a Play Store signing configuration.
             signingConfig = signingConfigs.getByName("debug")
-        }
-        create("play") {
-            initWith(getByName("release"))
-            applicationIdSuffix = ".play"
-            buildConfigField("boolean", "SFW_ONLY", "true")
-            // Store signing must be supplied securely before publishing.
-            signingConfig = null
-            matchingFallbacks += listOf("release")
         }
     }
     buildFeatures { compose = true; buildConfig = true }
