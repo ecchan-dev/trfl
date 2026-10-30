@@ -1,4 +1,4 @@
-# Trfl
+# Trfl — 4chan browser for Android
 
 A minimal, native Android app for browsing 4chan. Built with Material Design 3, with light and dark themes.
 
