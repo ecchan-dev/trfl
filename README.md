@@ -2,7 +2,7 @@
 
 A minimal, native Android app for browsing 4chan. Built with Material Design 3, with light and dark themes.
 
-**Lurk only:** Trfl supports reading, not posting or replying.
+**Lurk only:** Trfl supports reading, not posting or replying. This version prepares the interface for the upcoming POSTER update; posting is not enabled yet.
 
 ## Get Trfl
 

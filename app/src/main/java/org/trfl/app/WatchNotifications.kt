@@ -36,7 +36,7 @@ object WatchNotifications {
     fun schedule(context: Context) {
         val prefs = context.getSharedPreferences("trfl", 0)
         val manager = WorkManager.getInstance(context)
-        if (!prefs.getBoolean("watchNotifications", false) || prefs.getStringSet("watched", emptySet()).isNullOrEmpty()) {
+        if (!shouldCheckWatchedThreads(prefs.getStringSet("watched", emptySet()).orEmpty())) {
             manager.cancelUniqueWork("watch-replies")
             return
         }
@@ -79,17 +79,19 @@ object WatchNotifications {
 class WatchRepliesWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val prefs = applicationContext.getSharedPreferences("trfl", 0)
-        if (!prefs.getBoolean("watchNotifications", false)) return Result.success()
         ApiRequests.initialize(applicationContext.cacheDir)
         val watched = prefs.getStringSet("watched", emptySet()).orEmpty().toSet()
         val dead = prefs.getStringSet("dead", emptySet()).orEmpty().toSet()
         for (entry in watched - dead) {
-            if (isStopped || !prefs.getBoolean("watchNotifications", false)) break
+            if (isStopped) break
             if (!entry.matches(Regex("[a-z0-9]+/[0-9]+"))) continue
             try {
                 val posts = JSONObject(request("${entry.substringBefore('/')}/thread/${entry.substringAfter('/')}.json", force = true)).getJSONArray("posts")
                 if (entry in prefs.getStringSet("watched", emptySet()).orEmpty()) {
-                    prefs.edit().putInt("total:$entry", posts.length()).apply()
+                    val count = posts.length()
+                    val editor = prefs.edit().putInt("total:$entry", count)
+                    if (!prefs.contains("seen:$entry")) editor.putInt("seen:$entry", count)
+                    editor.apply()
                 }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { /* Keep the last known state on network failures. */ }
@@ -109,7 +111,7 @@ fun WatchNotificationSetting() {
         enabled = granted
         prefs.edit().putBoolean("watchNotifications", granted).apply()
     }
-    SettingsToggle("Background reply notifications", "Check watched threads about every 15 minutes; launcher dots require notifications", enabled) { value ->
+    SettingsToggle("Background reply notifications", "Watched threads are checked about every 15 minutes; notifications and launcher dots are optional", enabled) { value ->
         if (value && Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             permission.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {

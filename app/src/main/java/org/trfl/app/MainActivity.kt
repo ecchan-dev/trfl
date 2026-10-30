@@ -160,6 +160,8 @@ fun parsePost(p: JSONObject, board: String): Post {
     fun refresh() { forceRefresh = true; reload++ }
     var scrollTop by remember { mutableIntStateOf(0) }
     var quote by remember { mutableStateOf<Post?>(null) }
+    var replyText by rememberSaveable(board, thread) { mutableStateOf("") }
+    var replyFocusRequest by remember { mutableIntStateOf(0) }
     var replyListFor by remember(board, thread) { mutableStateOf<Long?>(null) }
     var jumpTo by remember { mutableStateOf<Long?>(null) }
     var boards by remember { mutableStateOf(emptyList<Board>()) }
@@ -414,9 +416,14 @@ fun parsePost(p: JSONObject, board: String): Post {
         }
     PredictivePage(route, history.dropLast(1).lastOrNull(), history.size > 1 && !searchOpen && media == null && pendingRemoval == null, ::back, previewStyle = "$boardColors/${if (boardColors) chanDark else phoneDark}/${if (boardColors) "board-palettes/$chanTheme" else phoneColors.primary}", retainedRoutes = nextHistory(history, route)) {
     BackHandler(searchOpen) { searchOpen = false; query = "" }
-    Scaffold(modifier = Modifier.nestedScroll(barScroll),
+    Scaffold(modifier = Modifier.imePadding().nestedScroll(barScroll),
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         bottomBar = {
+        if (thread != 0L && destination == "Boards" && !wideLayout) {
+            key(board, thread) {
+                ThreadReplyBar(text = replyText, onTextChange = { replyText = it }, onSend = {}, focusRequest = replyFocusRequest)
+            }
+        } else
         AnimatedVisibility(!wideLayout && showBars, enter = slideInVertically { it } + expandVertically(), exit = slideOutVertically { it } + shrinkVertically()) {
         NavigationBar {
             listOf("Boards" to Icons.Default.Dashboard, "Watched" to Icons.Default.Visibility, "Saves" to Icons.Default.Bookmark, "Settings" to Icons.Default.Settings).forEach { (label, icon) ->
@@ -679,6 +686,10 @@ fun parsePost(p: JSONObject, board: String): Post {
                             ReaderPostCard(p, compact = thread == 0L,
                                 replyCount = if (thread == 0L) p.replies else postReplies[p.id]?.size ?: 0,
                                 onClick = { if (thread == 0L) thread = p.id }, onImage = { media = p },
+                                onPostId = if (thread == 0L) null else { id ->
+                                    replyText += (if (replyText.isNotEmpty() && !replyText.endsWith("\n")) "\n" else "") + ">>$id\n"
+                                    replyFocusRequest++
+                                },
                                 onQuote = { id -> quote = posts.find { it.id == id } },
                                 onReplies = { if (thread == 0L) thread = p.id else replyListFor = p.id })
                         }
@@ -691,7 +702,7 @@ fun parsePost(p: JSONObject, board: String): Post {
             modifier = Modifier.align(Alignment.TopCenter)
                 .offset(y = readerActionTop),
             enter = fadeIn() + slideInVertically { -it }, exit = fadeOut() + slideOutVertically { -it }) {
-            FilledTonalIconButton(onClick = { showScrollTop = false; scrollTop++ }, modifier = Modifier.size(48.dp).shadow(6.dp, CircleShape)) {
+            FilledTonalIconButton(onClick = { showScrollTop = false; scrollTop++ }, modifier = Modifier.size(48.dp).shadow(6.dp, CircleShape), shape = CircleShape) {
                 Icon(Icons.Default.ArrowUpward, "Scroll to top")
             }
         }
@@ -711,14 +722,17 @@ fun parsePost(p: JSONObject, board: String): Post {
                 Text("Replies to No. $id", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.titleMedium)
                 FastScrollList(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(postReplies[id].orEmpty(), key = { it.id }) { reply ->
-                        Card(onClick = { replyListFor = null; imagesOnly = false; query = ""; jumpTo = reply.id },
-                            modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("No. ${reply.id}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                                Text(reply.body, maxLines = 8, overflow = TextOverflow.Ellipsis)
+                        ReaderPostCard(reply, compact = false, replyCount = postReplies[reply.id]?.size ?: 0,
+                            onClick = {}, onImage = { replyListFor = null; media = reply },
+                            onPostId = { postId ->
+                                replyListFor = null
+                                replyText += (if (replyText.isNotEmpty() && !replyText.endsWith("\n")) "\n" else "") + ">>$postId\n"
+                                replyFocusRequest++
+                            },
+                            onQuote = { quotedId -> replyListFor = null; quote = posts.find { it.id == quotedId } },
+                            onReplies = { replyListFor = reply.id }, footer = {
                                 TextButton(onClick = { replyListFor = null; imagesOnly = false; query = ""; jumpTo = reply.id }) { Text("Jump to reply") }
-                            }
-                        }
+                            })
                     }
                 }
             }

@@ -19,7 +19,9 @@ import coil.compose.AsyncImage
 
 fun wrapCutAtQuoteBoundary(text: String, proposed: Int): Int {
     val cut = proposed.coerceIn(0, text.length)
-    return Regex(">>[0-9]+").findAll(text).firstOrNull { cut > it.range.first && cut <= it.range.last }?.range?.first ?: cut
+    val quoteStart = Regex(">>[0-9]+").findAll(text).firstOrNull { cut > it.range.first && cut <= it.range.last }?.range?.first
+    val linkStart = postLinks(text).firstOrNull { cut > it.start && cut < it.end }?.start
+    return quoteStart ?: linkStart ?: cut
 }
 
 /** Measure the lines beside the thumbnail, then let the remaining text use the full width. */
@@ -49,12 +51,14 @@ fun WrappedPostBody(post: Post, compact: Boolean, onImage: () -> Unit, onQuote: 
             val layout = remember(post.body, style, widthPx, density.density, density.fontScale, measurer) {
                 measurer.measure(AnnotatedString(post.body), style, constraints = Constraints(maxWidth = widthPx))
             }
-            var lines = (0 until layout.lineCount).takeWhile { layout.getLineBottom(it) <= heightPx }.size.coerceAtLeast(1)
+            // A line starting beside the image can extend below its bottom. This avoids
+            // leaving an entire line-sized hole when the heights are not exact multiples.
+            var lines = (0 until layout.lineCount).takeWhile { layout.getLineTop(it) < heightPx }.size.coerceAtLeast(1)
             if (compact) lines = lines.coerceAtMost(5)
             val cut = wrapCutAtQuoteBoundary(post.body, layout.getLineEnd((lines - 1).coerceAtMost(layout.lineCount - 1), visibleEnd = false))
             val first = post.body.take(cut).trimEnd('\n')
             val remaining = post.body.drop(cut)
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column {
                 Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
                     image()
                     Box(Modifier.weight(1f)) {
