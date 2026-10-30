@@ -1,45 +1,50 @@
-# Trfl — LURKER
+# Trfl
 
-**v1.0.1 · Read-only 4chan reader for Android.**
+A minimal, native Android app for browsing 4chan. Built with Material Design 3, with light and dark themes.
 
-Full board access, including optional adult boards. Browse, watch and save; no posting or CAPTCHA. Built with Kotlin, Compose and Material 3, edge-to-edge system bars, and light/dark themes.
+**Lurk only:** Trfl supports reading, not posting or replying.
 
-## Included
+## Get Trfl
 
-- Bottom navigation: Boards → Watched → Saves → Settings, with app-bar search. Saves has Threads/Photos/Videos tabs: search saved thread text/titles/board IDs or media filenames and source text. Photos/videos include locally completed thread attachments and completed Android downloads; partial remote attachments are excluded. Existing saved-thread storage is retained, including archive/unarchive and removal confirmation. Media opens in the shared immersive viewer.
-- Predictive back uses Android's gesture progress and retained parent-page renderings. Cancelling does not navigate or trigger requests/read updates. Back returns to the actual origin (including bookmarks/watchlist), not an invented catalog. Normal back uses the same history. Search/dialogs retain their own dismissal priority; root delegates back-to-home to Android.
-- Parent previews are memory-only, half-resolution and retained for the bounded eight-page navigation history; no screenshot files are created. After process recreation, theme changes or navigation before capture, Back still works but keeps the current page opaque until completion rather than revealing an empty grey window. In-flight captures from outgoing routes and back gestures are rejected. Page scroll state and up to eight loaded post lists are retained during navigation; Refresh or changing preview mode invalidates those lists.
-- Live board directory; adult boards opt-in. Favorites stay first; long-press drag handles reorder within favorites or other boards, with edge auto-scroll and accessibility move actions.
-- Settings: Yotsuba B blue SFW / Yotsuba warm NSFW colors, with System/Light/Dark appearance, system theme fallback. Catalog/list view is selected while browsing and the last choice persists across boards and restarts; no duplicate Settings toggle. Dark text/background pairs have automated WCAG AA contrast checks.
-- Pull-to-refresh, catalog/thread scroll-to-top, in-thread quote previews/jumps, Android thread sharing and thread-link intent handling. Domain verification is not claimed: opening website links may require enabling TRFL in Android's Open by default settings.
-- Viewer has separate Save (private TRFL library, up to 128 MiB per attachment) and Download to phone (public Downloads) actions. Private saves are activity-scoped and show completion/failure; leaving the viewer cancels an unfinished save. Completed saves appear in Saves Photos/Videos. Previously listed downloads remain visible for compatibility; new phone-only downloads do not automatically enter Saves. Local-to-Downloads export requires Android 10+.
-- Media export via Android DownloadManager with OS-owned background transfers, network retries, progress/cancel/retry in Settings → Downloads. Failed retries start a new transfer; manual byte-range resume is not implemented. Existing bookmark snapshot downloads are separate and still activity-scoped.
-- Tablet-width navigation rail (600dp+) and adaptive grids; this is responsive sizing, not fold-hinge-aware two-pane support. Catalog card heights grow with system text scale, quote previews expose screen-reader actions, and controls use Material touch targets.
-- Shared bounded HTTP disk cache: board directory 24h, catalogs 60s, threads 30s; conditional ETag/Last-Modified revalidation, explicit Refresh bypasses freshness, and stale cached fallback on network/server failures. Confirmed 404s invalidate disposable thread entries, never explicit bookmarks. Cache failures do not prevent browsing. API disk budget 64 MiB; image cache 256 MiB plus 15% memory cache. Board lists and downloaded images survive app restarts subject to Android cache eviction.
-- Equal-height catalog cards and compact list mode; search loaded posts.
-- Thread reading, basic saved scroll positions and explicit local bookmarks (text plus media, bounded to 64 MiB/file and 256 MiB/thread; partial download counts shown). Network failure/dead threads fall back to the saved copy. No automatic bookmark refresh/download.
-- Confirm before removing a bookmark and its local files; archive/unarchive without deleting data.
-- Watched threads: manual checks on opening/refresh, mark read/all read, prune confirmed dead threads. Optional Settings → Background reply notifications checks about every 15 minutes using network-constrained Android WorkManager (OS power restrictions may delay checks). Android 13+ asks notification permission. A private summary notification enables launcher dots on supported launchers; reading all replies or stopping watches clears it. Dismissing notifications or disabling launcher/channel badges can hide the dot. Dead/archived server threads are labeled in both lists; network failures are not treated as dead.
-- Thread image grid; swipe/previous/next full-size viewer, pinch zoom/pan, WebM playback.
-- Animated list moves, title transitions, board colors, loading and Material controls; Compose respects the system animator duration scale.
-- Refresh, visible network errors/retry, offline Preview mode.
+Requires **Android 8.0 or later**.
 
-## Build and iterate
+### Recommended: Obtainium
 
-Requires JDK 17+ and an Android SDK with platform 35. Set `ANDROID_HOME` or create an ignored `local.properties` with `sdk.dir=/absolute/path/to/sdk`.
+[Install Obtainium](https://github.com/ImranR98/Obtainium/releases/latest), then add this URL as an app source:
 
-```sh
-./gradlew :app:assembleDebug :app:lintDebug
-adb -s emulator-5554 install -r app/build/outputs/apk/debug/app-debug.apk
-adb -s emulator-5554 shell am start -n org.trfl.app/.MainActivity
-python3 tools/emulator-smoke.py
+```text
+https://github.com/ecchan-dev/trfl
 ```
 
-The smoke script uses live `/g/` content and adds a favorite, watched thread and local bookmark. It navigates the UI and can change preferences: run only on a dedicated development device. `ADB` and `ANDROID_SERIAL` override its defaults. It does not start an emulator.
+Install Trfl through Obtainium to get it directly from GitHub and track future updates.
 
-`tools/install-phone.py` is an explicit worker deployment command: checks the expected hardware serial, builds/tests, installs without clearing app data, verifies the installed APK SHA-256 against the exact source build, then launches TRFL. Phone installs use the optimized, resource-shrunk, non-debuggable release build rather than the slower Compose debug build. Release is signed with the existing local debug certificate to preserve in-place updates and app data; this is not store distribution signing. Debug builds remain available for development. It never pairs, searches for devices or starts a VM. The source commit is visible in Settings.
+### Manual APK installation
 
+1. Open [the latest release](https://github.com/ecchan-dev/trfl/releases/latest).
+2. Download the APK under **Assets**.
+3. Open it on your phone and allow installation from your browser or file manager if Android asks.
 
-## MVP limits
+For updates, install the newer release APK over your existing installation—no need to uninstall.
 
-No posting/CAPTCHA or board categories yet. Cross-thread quote resolution, board links, shared local-file export, fold-hinge-aware layouts, GIF animation and Media3 playback remain follow-ups. Local bookmark snapshots are taken when bookmarked; media downloads can be partial or interrupted (text is saved first). Interrupted downloads do not resume automatically. Archive is a local organizational flag, not a new server snapshot. Watch unread counts use the last checked post total, not per-post read tracking. Scroll restoration is index-based. Dependencies remain pinned, not claimed to be the newest releases. Build, unit tests and lint are run locally and by the worker's phone deployment. The full expanded emulator smoke was interrupted by graphics failures/user navigation and is not claimed as passing.
+## What you can do
+
+- Browse boards in catalog or list view, and pin your favorites.
+- Read threads, follow quotes, and view images and videos fullscreen.
+- Watch threads for new replies, with optional background notifications.
+- Save threads and media locally, or download media to your phone.
+- Choose your theme and appearance.
+
+## Good to know
+
+- Adult boards are opt-in in Settings. Board content may be explicit or offensive.
+- Background reply checks are periodic, not instant, and may be delayed by Android's battery restrictions.
+- Saved threads are snapshots; they do not automatically update.
+- Trfl is an independent app and is not affiliated with 4chan.
+
+## Feedback
+
+[Report a bug or suggest a feature](https://github.com/ecchan-dev/trfl/issues). For bugs, include your Trfl version, Android version, and steps to reproduce. Avoid sharing private information in screenshots or logs.
+
+---
+
+Building from source? See the [development notes](docs/DEVELOPMENT.md).
