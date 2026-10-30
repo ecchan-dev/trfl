@@ -129,6 +129,7 @@ fun parsePost(p: JSONObject, board: String): Post {
 @Composable fun Trfl(incomingLink: String? = null, consumeLink: () -> Unit = {}) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("trfl", 0) }
+    var showLurkNotice by rememberSaveable { mutableStateOf(!prefs.getBoolean("lurkNoticeAcknowledged", false)) }
     val store = remember { ThreadStore(context) }
     val downloads = remember { MediaDownloads(context) }
     val mediaSaves = remember { MediaSaves(context) }
@@ -399,6 +400,18 @@ fun parsePost(p: JSONObject, board: String): Post {
     val animatedBackground by animateColorAsState(colors.background, label = "Board background")
     MaterialTheme(colorScheme = colors.copy(background = animatedBackground, surface = animatedBackground),
         shapes = MaterialTheme.shapes.copy(extraSmall = RoundedCornerShape(16.dp))) {
+        if (showLurkNotice) {
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Lurk only") },
+                text = { Text("Trfl is a read-only 4chan app. Browse, watch and save threads and media. Posting and replying are not supported.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        prefs.edit().putBoolean("lurkNoticeAcknowledged", true).apply()
+                        showLurkNotice = false
+                    }) { Text("Got it") }
+                })
+        }
     PredictivePage(route, history.dropLast(1).lastOrNull(), history.size > 1 && !searchOpen && media == null && pendingRemoval == null, ::back, previewStyle = "$boardColors/${if (boardColors) chanDark else phoneDark}/${if (boardColors) "board-palettes/$chanTheme" else phoneColors.primary}", retainedRoutes = nextHistory(history, route)) {
     BackHandler(searchOpen) { searchOpen = false; query = "" }
     Scaffold(modifier = Modifier.nestedScroll(barScroll),
