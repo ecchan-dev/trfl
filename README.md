@@ -1,6 +1,6 @@
 # Trfl — LURKER
 
-**v1.0.0 · Read-only 4chan reader for Android.**
+**v1.0.1 · Read-only 4chan reader for Android.**
 
 Full board access, including optional adult boards. Browse, watch and save; no posting or CAPTCHA. Built with Kotlin, Compose and Material 3, edge-to-edge system bars, and light/dark themes.
 

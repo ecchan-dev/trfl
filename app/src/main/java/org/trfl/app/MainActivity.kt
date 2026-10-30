@@ -48,7 +48,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.foundation.text.ClickableText
@@ -521,7 +520,7 @@ fun parsePost(p: JSONObject, board: String): Post {
         val readerActionTop = maxOf(
             WindowInsets.statusBars.union(WindowInsets.displayCutout).asPaddingValues().calculateTopPadding() + 24.dp,
             padding.calculateTopPadding() + 24.dp) - (if (scrollingReader) 0.dp else chromeInsets.calculateTopPadding())
-        PullToRefreshBox(isRefreshing = loading && destination != "Settings", onRefresh = { if (destination != "Settings") refresh() },
+        RefreshContainer(enabled = destination != "Settings", isRefreshing = loading, onRefresh = { refresh() },
             state = refreshState, modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds(),
             indicator = {
                 PullToRefreshDefaults.Indicator(
