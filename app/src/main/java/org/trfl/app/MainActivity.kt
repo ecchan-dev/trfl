@@ -135,6 +135,7 @@ fun parsePost(p: JSONObject, board: String): Post {
     val mediaSaves = remember { MediaSaves(context) }
     var savingMedia by remember { mutableStateOf(false) }
     var showDownloads by rememberSaveable { mutableStateOf(false) }
+    var showDonation by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val saveJobs = remember { mutableMapOf<String, Job>() }
     var saveStatus by remember { mutableStateOf(emptyMap<String, String>()) }
@@ -414,6 +415,22 @@ fun parsePost(p: JSONObject, board: String): Post {
                     }) { Text("Got it") }
                 })
         }
+    if (showDonation) {
+        val address = "0xc496917DD5d1e11e320Dc6D43dd3D361d86e96f9"
+        AlertDialog(
+            onDismissRequest = { showDonation = false },
+            title = { Text("Donate") },
+            text = { Text("Ethereum address\n$address") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Ethereum address", address))
+                    showDonation = false
+                }) { Text("Copy address") }
+            },
+            dismissButton = { TextButton(onClick = { showDonation = false }) { Text("Close") } },
+        )
+    }
     PredictivePage(route, history.dropLast(1).lastOrNull(), history.size > 1 && !searchOpen && media == null && pendingRemoval == null, ::back, previewStyle = "$boardColors/${if (boardColors) chanDark else phoneDark}/${if (boardColors) "board-palettes/$chanTheme" else phoneColors.primary}", retainedRoutes = nextHistory(history, route)) {
     BackHandler(searchOpen) { searchOpen = false; query = "" }
     Scaffold(modifier = Modifier.imePadding().nestedScroll(barScroll),
@@ -586,6 +603,7 @@ fun parsePost(p: JSONObject, board: String): Post {
                     item { WatchNotificationSetting() }
                     if (!BuildConfig.SFW_ONLY) item { SettingsToggle("18+ boards", "Show adult boards in the directory", adult) { adult = it; prefs.edit().putBoolean("adult", it).apply() } }
                     item { ListItem(headlineContent = { Text("Downloads") }, supportingContent = { Text("Progress, cancellation and retry") }, modifier = Modifier.clickable { showDownloads = true }) }
+                    item { ListItem(headlineContent = { Text("Donate") }, supportingContent = { Text("Ethereum") }, modifier = Modifier.clickable { showDonation = true }) }
                     item { ListItem(headlineContent = { Text("Trfl ${BuildConfig.VERSION_NAME}") }, supportingContent = { Text(BuildConfig.COMMIT.take(12)) }) }
                 }
             } else {

@@ -24,7 +24,7 @@ Install Trfl through Obtainium to get it directly from GitHub and track future u
 2. Download the APK under **Assets**.
 3. Open it on your phone and allow installation from your browser or file manager if Android asks.
 
-For updates, install the newer release APK over your existing installation—no need to uninstall.
+For updates signed with the same key, install the newer APK over your existing installation. Version 1.0.2 uses a new signing key and cannot update earlier installations in place. Uninstalling removes app data; back up anything you need before changing installations.
 
 ## What you can do
 
@@ -40,6 +40,10 @@ For updates, install the newer release APK over your existing installation—no 
 - Background reply checks are periodic, not instant, and may be delayed by Android's battery restrictions.
 - Saved threads are snapshots; they do not automatically update.
 - Trfl is an independent app and is not affiliated with 4chan.
+
+## Donations
+
+Ethereum: `0xc496917DD5d1e11e320Dc6D43dd3D361d86e96f9`
 
 ## Feedback
 
