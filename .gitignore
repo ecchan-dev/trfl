@@ -1,0 +1,11 @@
+.gradle/
+__pycache__/
+*.pyc
+.kotlin/
+**/build/
+local.properties
+*.iml
+.idea/
+.emulator/
+.integration/
+.worktrees/
