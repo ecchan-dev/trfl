@@ -9,3 +9,6 @@ local.properties
 .emulator/
 .integration/
 .worktrees/
+
+# Local agent instructions must never be published.
+AGENTS.md
