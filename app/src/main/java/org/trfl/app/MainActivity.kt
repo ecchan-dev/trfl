@@ -161,8 +161,12 @@ fun parsePost(p: JSONObject, board: String): Post {
     fun refresh() { forceRefresh = true; reload++ }
     var scrollTop by remember { mutableIntStateOf(0) }
     var quote by remember { mutableStateOf<Post?>(null) }
-    var replyText by rememberSaveable(board, thread) { mutableStateOf("") }
-    var replyFocusRequest by remember { mutableIntStateOf(0) }
+    val draftStore = remember { PostingDraftStore(java.io.File(context.filesDir, "posting-drafts")) }
+    var replyQuoteId by remember(board, thread) { mutableStateOf<Long?>(null) }
+    var replyFocusRequest by remember(board, thread) { mutableIntStateOf(0) }
+    var showNewThread by remember(board) { mutableStateOf(false) }
+    var postingName by remember { mutableStateOf(prefs.getString("postingName", "") ?: "") }
+    var postingOptions by remember { mutableStateOf(prefs.getString("postingOptions", "") ?: "") }
     var replyListFor by remember(board, thread) { mutableStateOf<Long?>(null) }
     var jumpTo by remember { mutableStateOf<Long?>(null) }
     var boards by remember { mutableStateOf(emptyList<Board>()) }
@@ -406,8 +410,8 @@ fun parsePost(p: JSONObject, board: String): Post {
         if (showLurkNotice) {
             AlertDialog(
                 onDismissRequest = {},
-                title = { Text("Lurk only") },
-                text = { Text("Trfl is a read-only 4chan app. Browse, watch and save threads and media. Posting and replying are not supported.") },
+                title = { Text("Posting unavailable") },
+                text = { Text("Browse, watch and save threads and media. You can prepare local drafts, but posting and replying are unavailable in Trfl.") },
                 confirmButton = {
                     TextButton(onClick = {
                         prefs.edit().putBoolean("lurkNoticeAcknowledged", true).apply()
@@ -415,6 +419,11 @@ fun parsePost(p: JSONObject, board: String): Post {
                     }) { Text("Got it") }
                 })
         }
+    if (showNewThread && board.isNotEmpty()) {
+        AlertDialog(onDismissRequest = { showNewThread = false }, title = { Text("New thread · /$board/") },
+            text = { PostingComposer(PostingDraftKey(board, null), null, 0, scope, draftStore, newThread = true) },
+            confirmButton = { TextButton(onClick = { showNewThread = false }) { Text("Close") } })
+    }
     if (showDonation) {
         val address = "0xc496917DD5d1e11e320Dc6D43dd3D361d86e96f9"
         AlertDialog(
@@ -436,9 +445,9 @@ fun parsePost(p: JSONObject, board: String): Post {
     Scaffold(modifier = Modifier.imePadding().nestedScroll(barScroll),
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         bottomBar = {
-        if (thread != 0L && destination == "Boards" && !wideLayout) {
+        if (thread != 0L && destination == "Boards") {
             key(board, thread) {
-                ThreadReplyBar(text = replyText, onTextChange = { replyText = it }, onSend = {}, focusRequest = replyFocusRequest)
+                PostingComposer(PostingDraftKey(board, thread), replyQuoteId, replyFocusRequest, scope, draftStore, onQuoteHandled = { replyQuoteId = null; replyFocusRequest = 0 })
             }
         } else
         AnimatedVisibility(!wideLayout && showBars, enter = slideInVertically { it } + expandVertically(), exit = slideOutVertically { it } + shrinkVertically()) {
@@ -491,6 +500,7 @@ fun parsePost(p: JSONObject, board: String): Post {
                 }
             }
             if (board.isEmpty() && onlySaved) IconToggleButton(checked = showArchive, onCheckedChange = { showArchive = it }) { Icon(Icons.Default.Archive, "Archived saves") }
+            if (board.isNotEmpty() && thread == 0L && destination == "Boards") IconButton(onClick = { showNewThread = true }) { Icon(Icons.Default.Add, "New thread draft") }
             if (board.isNotEmpty() && thread == 0L) IconButton(onClick = { catalog = !catalog; prefs.edit().putBoolean("catalog", catalog).apply() }) { Icon(if (catalog) Icons.Default.ViewList else Icons.Default.GridView, "Switch catalog/list") }
             if (destination != "Settings" && (destination != "Watched" || board.isNotEmpty())) Box {
                 IconButton(onClick = { pageMenu = true }) { Icon(Icons.Default.MoreVert, "More actions") }
@@ -569,6 +579,8 @@ fun parsePost(p: JSONObject, board: String): Post {
         }) {
             if (destination == "Settings") {
                 LazyColumn(contentPadding = PaddingValues(vertical = 12.dp)) {
+                    item { OutlinedTextField(postingName, { postingName = it; prefs.edit().putString("postingName", it).apply() }, label = { Text("Default posting name") }, supportingText = { Text("Saved locally for future posting support") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
+                    item { OutlinedTextField(postingOptions, { postingOptions = it; prefs.edit().putString("postingOptions", it).apply() }, label = { Text("Default posting options") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
                     item { SettingsToggle("4chan colors", "Off follows your phone’s theme and wallpaper colors",  boardColors) { boardColors = it; prefs.edit().putBoolean("boardColors", it).apply() } }
                     if (boardColors) item {
                         Box {
@@ -705,7 +717,7 @@ fun parsePost(p: JSONObject, board: String): Post {
                                 replyCount = if (thread == 0L) p.replies else postReplies[p.id]?.size ?: 0,
                                 onClick = { if (thread == 0L) thread = p.id }, onImage = { media = p },
                                 onPostId = if (thread == 0L) null else { id ->
-                                    replyText += (if (replyText.isNotEmpty() && !replyText.endsWith("\n")) "\n" else "") + ">>$id\n"
+                                    replyQuoteId = id
                                     replyFocusRequest++
                                 },
                                 onQuote = { id -> quote = posts.find { it.id == id } },
@@ -736,7 +748,7 @@ fun parsePost(p: JSONObject, board: String): Post {
                             onClick = {}, onImage = { replyListFor = null; media = reply },
                             onPostId = { postId ->
                                 replyListFor = null
-                                replyText += (if (replyText.isNotEmpty() && !replyText.endsWith("\n")) "\n" else "") + ">>$postId\n"
+                                replyQuoteId = postId
                                 replyFocusRequest++
                             },
                             onQuote = { quotedId -> replyListFor = null; quote = posts.find { it.id == quotedId } },

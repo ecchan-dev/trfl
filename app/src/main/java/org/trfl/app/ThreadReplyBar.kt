@@ -44,6 +44,7 @@ fun ThreadReplyBar(
     modifier: Modifier = Modifier,
     canSend: Boolean = false,
     focusRequest: Int = 0,
+    enabled: Boolean = true,
 ) {
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -72,6 +73,7 @@ fun ThreadReplyBar(
                     BasicTextField(
                         value = text,
                         onValueChange = onTextChange,
+                        enabled = enabled,
                         modifier = Modifier.fillMaxWidth().focusRequester(focus),
                         maxLines = 6,
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
