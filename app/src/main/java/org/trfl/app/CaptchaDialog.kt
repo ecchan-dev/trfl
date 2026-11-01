@@ -1,7 +1,6 @@
 package org.trfl.app
 
 import android.annotation.SuppressLint
-import android.graphics.Bitmap
 import android.webkit.CookieManager
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -16,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import java.io.ByteArrayInputStream
+import java.util.concurrent.atomic.AtomicBoolean
 
 @Composable
 internal fun CaptchaControl(target: PostingDraftKey) {
@@ -51,8 +51,10 @@ internal fun CaptchaControl(target: PostingDraftKey) {
 @Composable
 private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded: () -> Unit, onError: () -> Unit) {
     var webView by remember { mutableStateOf<WebView?>(null) }
+    val active = remember { AtomicBoolean(true) }
     DisposableEffect(Unit) {
         onDispose {
+            active.set(false)
             webView?.apply { stopLoading(); loadUrl("about:blank"); removeAllViews(); destroy() }
             webView = null
         }
@@ -76,16 +78,18 @@ private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded
                     if (captchaResourceAllowed(request.url.toString())) null else
                         WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(byteArrayOf()))
 
-                override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) { super.onPageStarted(view, url, favicon) }
-                override fun onPageFinished(view: WebView, url: String?) { onLoaded() }
+                private fun dispatch(view: WebView, callback: () -> Unit) {
+                    view.post { if (active.get()) callback() }
+                }
+                override fun onPageFinished(view: WebView, url: String?) { dispatch(view, onLoaded) }
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                    if (request.isForMainFrame || request.url.toString().startsWith("https://s.4cdn.org/js/tcaptcha.min.7.js") || request.url.host == "sys.4chan.org") onError()
+                    if (request.isForMainFrame || request.url.toString().startsWith("https://s.4cdn.org/js/tcaptcha.min.7.js") || request.url.host == "sys.4chan.org") dispatch(view, onError)
                 }
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-                    if (request.isForMainFrame || request.url.host == "sys.4chan.org" || request.url.path == "/js/tcaptcha.min.7.js") onError()
+                    if (request.isForMainFrame || request.url.host == "sys.4chan.org" || request.url.path == "/js/tcaptcha.min.7.js") dispatch(view, onError)
                 }
             }
-            loadDataWithBaseURL("https://sys.4chan.org/", captchaHostHtml(target), "text/html", "UTF-8", null)
+            loadDataWithBaseURL(CAPTCHA_BASE_URL, captchaHostHtml(target), "text/html", "UTF-8", null)
         }
     })
 }
