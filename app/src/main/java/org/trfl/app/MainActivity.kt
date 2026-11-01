@@ -457,7 +457,7 @@ fun parsePost(p: JSONObject, board: String): Post {
                     placeholder = { Text(if (board.isEmpty()) "Find a board" else "Search loaded posts") },
                     colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
                 LaunchedEffect(Unit) { searchFocus.requestFocus() }
-            } else AnimatedContent(targetState = if (destination == "Settings") "Settings" else if (board.isEmpty()) (if (onlySaved) "Saves" else if (destination == "Watched") "Watched" else "Trfl") else if (thread == 0L) "/$board/" else "/$board/ · $thread", label = "App bar title") { title -> Text(title, maxLines = 1) }
+            } else AnimatedContent(targetState = if (destination == "Settings") "Settings" else if (board.isEmpty()) (if (onlySaved) "Saves" else if (destination == "Watched") "Watched" else "Trfl") else if (thread == 0L) "/$board/" else "/$board/ · $thread", label = "App bar title") { title -> Text(title, maxLines = 1, modifier = Modifier.clickable(onClickLabel = "Scroll to top") { scrollTop++ }) }
         }, navigationIcon = {
             if (searchOpen) IconButton(onClick = { searchOpen = false; query = "" }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close search") }
             else if (board.isNotEmpty() && destination != "Settings") IconButton(onClick = { back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
@@ -554,9 +554,9 @@ fun parsePost(p: JSONObject, board: String): Post {
             }
         }
         val refreshState = rememberPullToRefreshState()
-        val readerActionTop = maxOf(
-            WindowInsets.statusBars.union(WindowInsets.displayCutout).asPaddingValues().calculateTopPadding() + 24.dp,
-            padding.calculateTopPadding() + 24.dp) - (if (scrollingReader) 0.dp else chromeInsets.calculateTopPadding())
+        // Indicator starts just below the app bar in every view: reader content sits under the bars,
+        // so offset by the bar's top inset; other views are already inset by chromeInsets.
+        val readerActionTop = 8.dp + (if (scrollingReader) chromeInsets.calculateTopPadding() else 0.dp)
         RefreshContainer(enabled = destination != "Settings", isRefreshing = loading, onRefresh = { refresh() },
             state = refreshState, modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds(),
             indicator = {
@@ -680,7 +680,7 @@ fun parsePost(p: JSONObject, board: String): Post {
                     }
                 } else if (catalog && thread == 0L) FastScrollGrid(state = gridState, columns = GridCells.Adaptive(160.dp), contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(filtered, key = { it.id }) { p -> Card(onClick = { thread = p.id }, modifier = Modifier.fillMaxWidth().height(140.dp + (180.dp * maxOf(1f, LocalDensity.current.fontScale)))) {
-                        Box(Modifier.fillMaxWidth().height(140.dp).background(MaterialTheme.colorScheme.surfaceContainerHighest), contentAlignment = Alignment.Center) {
+                        Box(Modifier.fillMaxWidth().height(140.dp).background(MaterialTheme.colorScheme.surfaceContainerHighest).clickable(enabled = p.image != null) { media = p }, contentAlignment = Alignment.Center) {
                             if (p.thumb != null) AsyncImage(p.thumb, "Thread thumbnail", Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
                             else Icon(Icons.Default.Image, "No attachment", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -716,14 +716,6 @@ fun parsePost(p: JSONObject, board: String): Post {
             }
         }
     }
-        androidx.compose.animation.AnimatedVisibility(visible = showScrollTop && (board.isNotEmpty() || destination == "Boards") && destination != "Settings" && !loading && !searchOpen,
-            modifier = Modifier.align(Alignment.TopCenter)
-                .offset(y = readerActionTop),
-            enter = fadeIn() + slideInVertically { -it }, exit = fadeOut() + slideOutVertically { -it }) {
-            FilledTonalIconButton(onClick = { showScrollTop = false; scrollTop++ }, modifier = Modifier.size(48.dp).shadow(6.dp, CircleShape), shape = CircleShape) {
-                Icon(Icons.Default.ArrowUpward, "Scroll to top")
-            }
-        }
     }
     }
     }
