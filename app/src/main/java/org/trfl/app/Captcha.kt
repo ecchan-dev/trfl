@@ -19,6 +19,8 @@ internal class CaptchaChallenge(val target: PostingDraftKey, private val token: 
 // Intentionally not a data class: don't accidentally include credentials in toString().
 internal class CaptchaAnswer(val challenge: String, val response: String)
 
+internal enum class CaptchaFailure { HTTP, NETWORK, ANTIBOT, COOLDOWN, UNSUPPORTED }
+internal class CaptchaException(val failure: CaptchaFailure) : Exception()
 internal fun interface CaptchaTransport { fun load(target: PostingDraftKey): String }
 internal fun requireCaptchaTarget(target: PostingDraftKey, restricted: Boolean = BuildConfig.SFW_ONLY) {
     require(target.board.matches(Regex("[a-zA-Z0-9]{1,16}")) && (target.threadId == null || target.threadId > 0))
@@ -33,18 +35,21 @@ internal class HttpCaptchaTransport : CaptchaTransport {
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 10000
             connection.readTimeout = 10000
-            check(connection.responseCode == 200)
+            connection.setRequestProperty("Referer", "https://boards.4chan.org/${target.board}/")
+            if (connection.responseCode != 200) throw CaptchaException(CaptchaFailure.HTTP)
             return connection.inputStream.use { input ->
                 val out = java.io.ByteArrayOutputStream()
                 val buffer = ByteArray(8192)
                 while (true) {
                     val n = input.read(buffer)
                     if (n < 0) break
-                    check(out.size() + n <= MAX_HTML)
+                    if (out.size() + n > MAX_HTML) throw CaptchaException(CaptchaFailure.UNSUPPORTED)
                     out.write(buffer, 0, n)
                 }
                 out.toString("UTF-8")
             }
+        } catch (e: CaptchaException) { throw e
+        } catch (_: java.io.IOException) { throw CaptchaException(CaptchaFailure.NETWORK)
         } finally { connection.disconnect() }
     }
 }
@@ -64,7 +69,9 @@ private fun imagePixels(bytes: ByteArray): Long {
 
 internal object CaptchaParser {
     fun parse(html: String, target: PostingDraftKey, now: Long, validateImage: (ByteArray) -> Long = ::imagePixels): CaptchaChallenge {
-        require(html.length <= MAX_HTML && !html.contains("mcl.spur.us", ignoreCase = true))
+        requireCaptchaTarget(target)
+        require(html.length <= MAX_HTML)
+        if (html.contains("mcl.spur.us", ignoreCase = true)) throw CaptchaException(CaptchaFailure.ANTIBOT)
         val marker = ".postMessage("
         val start = html.indexOf(marker).let { if (it < 0) -1 else it + marker.length }
         require(start >= 0 && html.getOrNull(start) == '{')
@@ -77,8 +84,9 @@ internal object CaptchaParser {
         require(end > start)
         val wrapper = JSONObject(html.substring(start, end))
         val obj = wrapper.getJSONObject("twister")
-        require(!obj.has("error") || obj.isNull("error") || obj.optString("error").isBlank())
-        require(obj.optInt("cd", 0) <= 0 && obj.optInt("pcd", 0) <= 0 && !obj.has("pcd_msg") && !obj.has("cd_until"))
+        if (!obj.isNull("error") && obj.optString("error").isNotBlank()) throw CaptchaException(if (obj.optInt("cd", 0) > 0 || obj.optInt("pcd", 0) > 0) CaptchaFailure.COOLDOWN else CaptchaFailure.UNSUPPORTED)
+        if (obj.optInt("pcd", 0) > 0 || obj.optBoolean("mpcd", false) || obj.optInt("mpcd", 0) > 0 || (!obj.isNull("pcd_msg") && obj.optString("pcd_msg").isNotBlank())) throw CaptchaException(CaptchaFailure.COOLDOWN)
+        require(!obj.has("extTask") || obj.isNull("extTask"))
         val token = obj.getString("challenge")
         require(token.isNotBlank() && token.length <= 1024 && !token.equals("noop", true))
         // The referenced client uses 120 seconds as its missing-TTL fallback, but
@@ -98,10 +106,11 @@ internal object CaptchaParser {
         }
         val tasks = (0 until rawTasks.length()).map { index ->
             val task = rawTasks.getJSONObject(index)
-            val title = task.optString("str").takeIf { it.isNotBlank() && it.length <= 500 }
-            // Formatted HTML can contain hidden text or embedded images; do not mislead users.
-            require(title == null || title.none { it == '<' || it == '>' || it == '&' })
-            val titleImage = task.optString("img").takeIf { it.isNotBlank() }?.let { image(it) }
+            val rawTitle = if (task.isNull("str")) null else task.getString("str").takeIf { it.isNotBlank() }
+            val rawImage = if (task.isNull("img")) null else task.getString("img").takeIf { it.isNotBlank() }
+            val prompt = if (rawImage != null) CaptchaPrompt(null, image(rawImage)) else rawTitle?.let { parseCaptchaPrompt(it, ::image) }
+            val title = prompt?.text
+            val titleImage = prompt?.image
             require(title != null || titleImage != null)
             val items = task.getJSONArray("items"); require(items.length() in 1..10)
             CaptchaTask(title, titleImage, (0 until items.length()).map { image(items.getString(it)) })

@@ -32,6 +32,22 @@ class CaptchaTest {
         assertTrue(runCatching { CaptchaParser.parse(html, PostingDraftKey("g", 123), 0) { 1_048_576 } }.isFailure)
     }
 
+    @Test fun syntheticOfficialShapeWithNullCooldownAndFormattedPrompt() {
+        val html = ".postMessage({\"twister\":{\"challenge\":\"synthetic\",\"ttl\":120,\"cd\":5,\"pcd\":null,\"pcd_msg\":null,\"cd_until\":null,\"ticket\":false,\"tasks\":[{\"str\":\"Find <b>exactly</b> <b style=\\\"display:none\\\">3</b><b>6 &amp; 7</b>\",\"img\":null,\"items\":[\"AQ==\",\"Ag==\"]}]}})"
+        val result = CaptchaParser.parse(html, PostingDraftKey("g", 1), 0) { 1 }
+        assertEquals("Find exactly 6 & 7", result.tasks.single().title)
+        assertEquals("1", result.answer(PostingDraftKey("g", 1), listOf(1), 1)?.response)
+        assertEquals(CaptchaFailure.COOLDOWN, (runCatching { CaptchaParser.parse(html.replace("\"pcd\":null", "\"pcd\":5"), PostingDraftKey("g", 1), 0) { 1 } }.exceptionOrNull() as CaptchaException).failure)
+    }
+
+    @Test fun syntheticPromptImageAndUnknownMarkup() {
+        val prompt = parseCaptchaPrompt("<img src=\"data:image/png;base64,AQ==\" style=\"float:right;margin:10px 0 0 10px\">Pick &amp; choose") { java.util.Base64.getDecoder().decode(it) }
+        assertEquals("Pick & choose", prompt.text)
+        assertArrayEquals(byteArrayOf(1), prompt.image)
+        assertTrue(runCatching { parseCaptchaPrompt("<script>bad</script>") { byteArrayOf(1) } }.isFailure)
+        assertTrue(runCatching { parseCaptchaPrompt("<img src=\"https://example.org/a\">") { byteArrayOf(1) } }.isFailure)
+    }
+
     @Test fun syntheticImageBoundsAndPlayPolicy() {
         assertTrue(validCaptchaImageBounds(1024, 1024))
         assertFalse(validCaptchaImageBounds(0, 1))

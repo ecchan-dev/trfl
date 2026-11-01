@@ -42,8 +42,16 @@ internal fun CaptchaControl(target: PostingDraftKey, transport: CaptchaTransport
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (failure: CaptchaException) {
+            error = when (failure.failure) {
+                CaptchaFailure.HTTP -> "CAPTCHA server refused the request. Try again later."
+                CaptchaFailure.NETWORK -> "CAPTCHA connection failed. Check your connection and retry."
+                CaptchaFailure.ANTIBOT -> "An anti-bot check is required; it is not supported in Trfl."
+                CaptchaFailure.COOLDOWN -> "CAPTCHA is unavailable or rate-limited. Try again later."
+                CaptchaFailure.UNSUPPORTED -> "CAPTCHA format or server response is unsupported."
+            }
         } catch (_: Exception) {
-            error = "CAPTCHA unavailable or unsupported. No post was sent."
+            error = "CAPTCHA format or server response is unsupported."
         }
     }
     LaunchedEffect(challenge) {
@@ -72,7 +80,7 @@ internal fun CaptchaControl(target: PostingDraftKey, transport: CaptchaTransport
             }
         }
     }, confirmButton = {
-        TextButton(enabled = challenge != null && choices.isNotEmpty() && choices.all { it >= 0 } && answer == null, onClick = {
+        if (challenge != null) TextButton(enabled = choices.isNotEmpty() && choices.all { it >= 0 } && answer == null, onClick = {
             answer = challenge?.answer(target, choices, SystemClock.elapsedRealtime())
             if (answer == null) { challenge = null; error = "CAPTCHA expired. Close and load another." }
         }) { Text("Confirm choices") }
