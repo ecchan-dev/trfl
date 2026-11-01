@@ -7,18 +7,27 @@ android {
     namespace = "org.trfl.app"
     compileSdk = 35
     defaultConfig {
-        applicationId = "org.trfl.app"; minSdk = 26; targetSdk = 35; versionCode = 103; versionName = "1.0.2"
+        applicationId = "org.trfl.app"; minSdk = 26; targetSdk = 35; versionCode = 104; versionName = "1.0.3"
         buildConfigField("boolean", "SFW_ONLY", "false")
         buildConfigField("String", "COMMIT", "\"${providers.gradleProperty("trflCommit").getOrElse("development")}\"")
+    }
+    // Release signing is supplied outside the repository. Set TRFL_RELEASE_STORE_FILE,
+    // TRFL_RELEASE_STORE_PASSWORD, TRFL_RELEASE_KEY_ALIAS and TRFL_RELEASE_KEY_PASSWORD.
+    signingConfigs {
+        create("trflRelease") {
+            System.getenv("TRFL_RELEASE_STORE_FILE")?.let { storeFile = file(it) }
+            storePassword = System.getenv("TRFL_RELEASE_STORE_PASSWORD")
+            keyAlias = System.getenv("TRFL_RELEASE_KEY_ALIAS")
+            keyPassword = System.getenv("TRFL_RELEASE_KEY_PASSWORD")
+        }
     }
     buildTypes {
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
-            // Local phone distribution: keep the existing debug certificate so updates
-            // preserve installed data. This is not a Play Store signing configuration.
-            signingConfig = signingConfigs.getByName("debug")
+            // Use the release key when provided; otherwise fall back to the debug key (local builds only).
+            signingConfig = if (System.getenv("TRFL_RELEASE_STORE_FILE") != null) signingConfigs.getByName("trflRelease") else signingConfigs.getByName("debug")
         }
     }
     buildFeatures { compose = true; buildConfig = true }
