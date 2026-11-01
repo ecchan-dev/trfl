@@ -54,7 +54,8 @@ class PostingDraftStoreTest {
         store.save(key, "test", "", null)
         val file = dir.listFiles()!!.single()
         file.writeBytes(byteArrayOf(0, 1))
-        assertNull(PostingDraftStore(dir).load(key))
+        assertThrows(IllegalStateException::class.java) { PostingDraftStore(dir).load(key) }
+        assertThrows(IllegalStateException::class.java) { store.save(key, "replacement", "", null) }
         assertTrue(file.exists())
         assertFalse(store.clearIfRevision(key, "anything"))
     }

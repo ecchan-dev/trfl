@@ -161,12 +161,10 @@ fun parsePost(p: JSONObject, board: String): Post {
     fun refresh() { forceRefresh = true; reload++ }
     var scrollTop by remember { mutableIntStateOf(0) }
     var quote by remember { mutableStateOf<Post?>(null) }
-    val draftStore = remember { PostingDraftStore(java.io.File(context.filesDir, "posting-drafts")) }
+    val draftStore = remember { PostingDraftStore(java.io.File(context.noBackupFilesDir, "posting-drafts")) }
     var replyQuoteId by remember(board, thread) { mutableStateOf<Long?>(null) }
     var replyFocusRequest by remember(board, thread) { mutableIntStateOf(0) }
     var showNewThread by remember(board) { mutableStateOf(false) }
-    var postingName by remember { mutableStateOf(prefs.getString("postingName", "") ?: "") }
-    var postingOptions by remember { mutableStateOf(prefs.getString("postingOptions", "") ?: "") }
     var replyListFor by remember(board, thread) { mutableStateOf<Long?>(null) }
     var jumpTo by remember { mutableStateOf<Long?>(null) }
     var boards by remember { mutableStateOf(emptyList<Board>()) }
@@ -421,7 +419,7 @@ fun parsePost(p: JSONObject, board: String): Post {
         }
     if (showNewThread && board.isNotEmpty()) {
         AlertDialog(onDismissRequest = { showNewThread = false }, title = { Text("New thread · /$board/") },
-            text = { PostingComposer(PostingDraftKey(board, null), null, 0, scope, draftStore, newThread = true) },
+            text = { PostingComposer(PostingDraftKey(board, null), null, 0, draftStore, newThread = true) },
             confirmButton = { TextButton(onClick = { showNewThread = false }) { Text("Close") } })
     }
     if (showDonation) {
@@ -447,7 +445,7 @@ fun parsePost(p: JSONObject, board: String): Post {
         bottomBar = {
         if (thread != 0L && destination == "Boards") {
             key(board, thread) {
-                PostingComposer(PostingDraftKey(board, thread), replyQuoteId, replyFocusRequest, scope, draftStore, onQuoteHandled = { replyQuoteId = null; replyFocusRequest = 0 })
+                PostingComposer(PostingDraftKey(board, thread), replyQuoteId, replyFocusRequest, draftStore, onQuoteHandled = { replyQuoteId = null })
             }
         } else
         AnimatedVisibility(!wideLayout && showBars, enter = slideInVertically { it } + expandVertically(), exit = slideOutVertically { it } + shrinkVertically()) {
@@ -579,8 +577,6 @@ fun parsePost(p: JSONObject, board: String): Post {
         }) {
             if (destination == "Settings") {
                 LazyColumn(contentPadding = PaddingValues(vertical = 12.dp)) {
-                    item { OutlinedTextField(postingName, { postingName = it; prefs.edit().putString("postingName", it).apply() }, label = { Text("Default posting name") }, supportingText = { Text("Saved locally for future posting support") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
-                    item { OutlinedTextField(postingOptions, { postingOptions = it; prefs.edit().putString("postingOptions", it).apply() }, label = { Text("Default posting options") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
                     item { SettingsToggle("4chan colors", "Off follows your phone’s theme and wallpaper colors",  boardColors) { boardColors = it; prefs.edit().putBoolean("boardColors", it).apply() } }
                     if (boardColors) item {
                         Box {

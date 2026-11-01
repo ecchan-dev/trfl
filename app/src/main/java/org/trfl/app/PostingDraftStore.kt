@@ -39,14 +39,14 @@ data class PostingDraft(val key: PostingDraftKey, val text: String, val subject:
  * Thread safe across store instances in this process; not intended for multi-process writers.
  */
 class PostingDraftStore(private val directory: File) {
-    init { check(directory.isDirectory || directory.mkdirs()) }
-
     fun load(key: PostingDraftKey): PostingDraft? = synchronized(lock) { read(key) }
 
     fun save(key: PostingDraftKey, text: String, subject: String, attachment: PostingDraftAttachment?): PostingDraft = synchronized(lock) {
+        check(directory.isDirectory || directory.mkdirs())
         require(text.toByteArray(Charsets.UTF_8).size <= MAX_TEXT_BYTES)
         require(subject.toByteArray(Charsets.UTF_8).size <= MAX_SUBJECT_BYTES)
         val target = file(key)
+        if (target.exists()) read(key) // Refuse to overwrite an unreadable draft.
         if (!target.exists()) check((directory.listFiles() ?: error("Cannot list drafts")).count { it.name.endsWith(".draft") } < MAX_DRAFTS) { "Draft limit reached" }
         val draft = PostingDraft(key, text, subject, attachment, UUID.randomUUID().toString())
         val pending = File.createTempFile("draft-", ".tmp", directory)
@@ -73,7 +73,7 @@ class PostingDraftStore(private val directory: File) {
 
     /** Returns false if absent, unreadable, or a newer revision exists. */
     fun clearIfRevision(key: PostingDraftKey, revision: String): Boolean = synchronized(lock) {
-        val existing = read(key)
+        val existing = try { read(key) } catch (_: IllegalStateException) { null }
         existing != null && existing.revision == revision && file(key).delete()
     }
 
@@ -104,7 +104,7 @@ class PostingDraftStore(private val directory: File) {
                 require(input.read() == -1)
                 PostingDraft(key, text, subject, attachment, revision)
             }
-        } catch (_: Exception) { null } // Preserve damaged or future-version data for recovery.
+        } catch (e: Exception) { throw IllegalStateException("Unreadable draft", e) } // Do not overwrite damaged or future-version data.
     }
 
     companion object {
