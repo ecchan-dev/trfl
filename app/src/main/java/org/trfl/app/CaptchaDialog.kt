@@ -44,7 +44,7 @@ internal fun CaptchaControl(target: PostingDraftKey, transport: CaptchaTransport
             throw cancelled
         } catch (failure: CaptchaException) {
             error = when (failure.failure) {
-                CaptchaFailure.HTTP -> "CAPTCHA server refused the request. Try again later."
+                CaptchaFailure.HTTP -> captchaHttpMessage(failure.httpStatus)
                 CaptchaFailure.NETWORK -> "CAPTCHA connection failed. Check your connection and retry."
                 CaptchaFailure.ANTIBOT -> "An anti-bot check is required; it is not supported in Trfl."
                 CaptchaFailure.COOLDOWN -> "CAPTCHA is unavailable or rate-limited. Try again later."

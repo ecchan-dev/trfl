@@ -5,6 +5,34 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CaptchaTest {
+    @Test fun syntheticRequestContractAndStatuses() {
+        val target = PostingDraftKey("g", 123)
+        assertEquals("https://sys.4chan.org/captcha?board=g", buildCaptchaRequest(PostingDraftKey("g", null)).toString())
+        assertEquals("https://sys.4chan.org/captcha?board=g&thread_id=123", buildCaptchaRequest(target).toString())
+        for (status in listOf(302, 403, 404, 429, 500)) {
+            var captured: java.net.HttpURLConnection? = null
+            val transport = HttpCaptchaTransport { url ->
+                object : java.net.HttpURLConnection(url) {
+                    override fun connect() = Unit
+                    override fun disconnect() = Unit
+                    override fun usingProxy() = false
+                    override fun getResponseCode(): Int = status
+                }.also { captured = it }
+            }
+            val error = runCatching { transport.load(target) }.exceptionOrNull() as CaptchaException
+            assertEquals(status, error.httpStatus)
+            assertEquals("GET", captured!!.requestMethod)
+            assertEquals("https://boards.4chan.org/g/", captured!!.getRequestProperty("Referer"))
+            assertNull(captured!!.getRequestProperty("Origin"))
+            assertNull(captured!!.getRequestProperty("User-Agent"))
+            assertFalse(captured!!.instanceFollowRedirects)
+            assertTrue(captchaHttpMessage(error.httpStatus).contains("HTTP $status"))
+        }
+        assertTrue(captchaHttpMessage(302).contains("redirect"))
+        assertTrue(captchaHttpMessage(403).contains("forbidden"))
+        assertTrue(captchaHttpMessage(404).contains("not found"))
+        assertTrue(captchaHttpMessage(429).contains("rate limited"))
+    }
     @Test fun syntheticMalformedOversizeAndUnsupportedFailClosed() {
         val target = PostingDraftKey("g", 123)
         val samples = listOf(

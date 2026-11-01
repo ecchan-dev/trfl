@@ -20,23 +20,43 @@ internal class CaptchaChallenge(val target: PostingDraftKey, private val token: 
 internal class CaptchaAnswer(val challenge: String, val response: String)
 
 internal enum class CaptchaFailure { HTTP, NETWORK, ANTIBOT, COOLDOWN, UNSUPPORTED }
-internal class CaptchaException(val failure: CaptchaFailure) : Exception()
+internal class CaptchaException(val failure: CaptchaFailure, val httpStatus: Int? = null) : Exception()
 internal fun interface CaptchaTransport { fun load(target: PostingDraftKey): String }
+internal fun captchaHttpMessage(status: Int?): String {
+    val detail = when (status) {
+        403 -> "access forbidden"
+        429 -> "rate limited"
+        in 300..399 -> "redirect not followed"
+        404 -> "endpoint not found"
+        else -> "request failed"
+    }
+    return if (status != null && status in 100..599) "CAPTCHA $detail (HTTP $status)." else "CAPTCHA request failed."
+}
 internal fun requireCaptchaTarget(target: PostingDraftKey, restricted: Boolean = BuildConfig.SFW_ONLY) {
     require(target.board.matches(Regex("[a-zA-Z0-9]{1,16}")) && (target.threadId == null || target.threadId > 0))
     require(BoardPolicy.allows(target.board, restricted || BuildConfig.SFW_ONLY)) { "Board unavailable in this build" }
 }
-internal class HttpCaptchaTransport : CaptchaTransport {
+// Initial, ticket-free request only. Kuroba bf3723ac and 4cdn tcaptcha.min.7.js
+// both use this endpoint and query; ticket, ticket_resp, cookies and mcl are unsupported.
+internal fun buildCaptchaRequest(target: PostingDraftKey): URL {
+    requireCaptchaTarget(target)
+    val query = "board=${target.board}" + (target.threadId?.let { "&thread_id=$it" } ?: "")
+    return URL("https://sys.4chan.org/captcha?$query")
+}
+
+internal class HttpCaptchaTransport(
+    private val open: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }
+) : CaptchaTransport {
     override fun load(target: PostingDraftKey): String {
-        requireCaptchaTarget(target)
-        val query = "board=${target.board}" + (target.threadId?.let { "&thread_id=$it" } ?: "")
-        val connection = URL("https://sys.4chan.org/captcha?$query").openConnection() as HttpURLConnection
+        val connection = open(buildCaptchaRequest(target))
         try {
+            connection.requestMethod = "GET"
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 10000
             connection.readTimeout = 10000
             connection.setRequestProperty("Referer", "https://boards.4chan.org/${target.board}/")
-            if (connection.responseCode != 200) throw CaptchaException(CaptchaFailure.HTTP)
+            val status = connection.responseCode
+            if (status != 200) throw CaptchaException(CaptchaFailure.HTTP, status.takeIf { it in 100..599 })
             return connection.inputStream.use { input ->
                 val out = java.io.ByteArrayOutputStream()
                 val buffer = ByteArray(8192)
