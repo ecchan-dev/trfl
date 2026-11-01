@@ -16,7 +16,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runInterruptible
 
 @Composable
 internal fun CaptchaControl(target: PostingDraftKey, transport: CaptchaTransport = remember { HttpCaptchaTransport() }) {
@@ -29,16 +30,25 @@ internal fun CaptchaControl(target: PostingDraftKey, transport: CaptchaTransport
     var error by remember(target) { mutableStateOf<String?>(null) }
     var answer by remember(target) { mutableStateOf<CaptchaAnswer?>(null) }
     var choices by remember(target) { mutableStateOf<List<Int>>(emptyList()) }
-    var now by remember(target) { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(target) {
         val started = SystemClock.elapsedRealtime()
-        val result = withContext(Dispatchers.IO) { runCatching { CaptchaParser.parse(transport.load(target), target, started) } }
-        result.onSuccess { challenge = it; choices = List(it.tasks.size) { -1 } }.onFailure { error = "CAPTCHA unavailable or unsupported. No post was sent." }
+        try {
+            val result = runInterruptible(Dispatchers.IO) { CaptchaParser.parse(transport.load(target), target, started) }
+            if (result.expired(SystemClock.elapsedRealtime())) {
+                error = "CAPTCHA expired. Close and load another."
+            } else {
+                challenge = result
+                choices = List(result.tasks.size) { -1 }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            error = "CAPTCHA unavailable or unsupported. No post was sent."
+        }
     }
     LaunchedEffect(challenge) {
         while (challenge != null) {
-            now = SystemClock.elapsedRealtime()
-            if (challenge?.expired(now) == true) { challenge = null; answer = null; error = "CAPTCHA expired. Close and load another."; break }
+            if (challenge?.expired(SystemClock.elapsedRealtime()) == true) { challenge = null; answer = null; error = "CAPTCHA expired. Close and load another."; break }
             delay(500)
         }
     }

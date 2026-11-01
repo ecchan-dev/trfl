@@ -1,7 +1,7 @@
 package org.trfl.app
 
 import android.graphics.BitmapFactory
-import android.util.Base64
+import java.util.Base64
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -20,9 +20,13 @@ internal class CaptchaChallenge(val target: PostingDraftKey, private val token: 
 internal class CaptchaAnswer(val challenge: String, val response: String)
 
 internal fun interface CaptchaTransport { fun load(target: PostingDraftKey): String }
+internal fun requireCaptchaTarget(target: PostingDraftKey, restricted: Boolean = BuildConfig.SFW_ONLY) {
+    require(target.board.matches(Regex("[a-zA-Z0-9]{1,16}")) && (target.threadId == null || target.threadId > 0))
+    require(BoardPolicy.allows(target.board, restricted || BuildConfig.SFW_ONLY)) { "Board unavailable in this build" }
+}
 internal class HttpCaptchaTransport : CaptchaTransport {
     override fun load(target: PostingDraftKey): String {
-        require(target.board.matches(Regex("[a-zA-Z0-9]{1,16}")) && (target.threadId == null || target.threadId > 0))
+        requireCaptchaTarget(target)
         val query = "board=${target.board}" + (target.threadId?.let { "&thread_id=$it" } ?: "")
         val connection = URL("https://sys.4chan.org/captcha?$query").openConnection() as HttpURLConnection
         try {
@@ -46,8 +50,20 @@ internal class HttpCaptchaTransport : CaptchaTransport {
 }
 private const val MAX_HTML = 2_000_000
 private const val MAX_IMAGE = 200_000
+internal fun validCaptchaImageBounds(width: Int, height: Int): Boolean =
+    width in 1..1024 && height in 1..1024 && width.toLong() * height <= 1_048_576
+
+private fun imagePixels(bytes: ByteArray): Long {
+    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    require(validCaptchaImageBounds(opts.outWidth, opts.outHeight))
+    val bitmap = requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+    bitmap.recycle()
+    return opts.outWidth.toLong() * opts.outHeight
+}
+
 internal object CaptchaParser {
-    fun parse(html: String, target: PostingDraftKey, now: Long): CaptchaChallenge {
+    fun parse(html: String, target: PostingDraftKey, now: Long, validateImage: (ByteArray) -> Long = ::imagePixels): CaptchaChallenge {
         require(html.length <= MAX_HTML && !html.contains("mcl.spur.us", ignoreCase = true))
         val marker = ".postMessage("
         val start = html.indexOf(marker).let { if (it < 0) -1 else it + marker.length }
@@ -65,24 +81,31 @@ internal object CaptchaParser {
         require(obj.optInt("cd", 0) <= 0 && obj.optInt("pcd", 0) <= 0 && !obj.has("pcd_msg") && !obj.has("cd_until"))
         val token = obj.getString("challenge")
         require(token.isNotBlank() && token.length <= 1024 && !token.equals("noop", true))
+        // The referenced client uses 120 seconds as its missing-TTL fallback, but
+        // rejects missing TTL for ordinary image tasks. Follow the stricter path.
         val ttl = obj.getInt("ttl"); require(ttl in 1..600)
         val rawTasks = obj.getJSONArray("tasks"); require(rawTasks.length() in 1..10)
+        var totalPixels = 0L
+        fun image(encoded: String): ByteArray {
+            require(encoded.length <= MAX_IMAGE * 2)
+            val bytes = Base64.getDecoder().decode(encoded.filterNot { it == '\n' || it == '\r' })
+            require(bytes.size in 1..MAX_IMAGE)
+            val pixels = validateImage(bytes)
+            require(pixels in 1..1_048_576)
+            totalPixels += pixels
+            require(totalPixels <= 4_194_304) // At most 16 MiB decoded ARGB in the dialog.
+            return bytes
+        }
         val tasks = (0 until rawTasks.length()).map { index ->
             val task = rawTasks.getJSONObject(index)
             val title = task.optString("str").takeIf { it.isNotBlank() && it.length <= 500 }
-            val titleImage = task.optString("img").takeIf { it.isNotBlank() }?.let(::image)
+            // Formatted HTML can contain hidden text or embedded images; do not mislead users.
+            require(title == null || title.none { it == '<' || it == '>' || it == '&' })
+            val titleImage = task.optString("img").takeIf { it.isNotBlank() }?.let { image(it) }
             require(title != null || titleImage != null)
             val items = task.getJSONArray("items"); require(items.length() in 1..10)
             CaptchaTask(title, titleImage, (0 until items.length()).map { image(items.getString(it)) })
         }
         return CaptchaChallenge(target, token, tasks, now + ttl * 1000L)
-    }
-    private fun image(encoded: String): ByteArray {
-        require(encoded.length <= MAX_IMAGE * 2)
-        val bytes = Base64.decode(encoded, Base64.DEFAULT); require(bytes.size in 1..MAX_IMAGE)
-        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-        require(opts.outWidth in 1..1024 && opts.outHeight in 1..1024 && opts.outWidth.toLong() * opts.outHeight <= 1_048_576)
-        return bytes
     }
 }
