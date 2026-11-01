@@ -66,6 +66,7 @@ fun PostingComposer(
     }
     Column {
         Text("Posting is unavailable. Text drafts are saved on this device; use the official board to post.", modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall)
+        CaptchaControl(target)
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp)) }
         if (newThread) OutlinedTextField(subject, { if (it.toByteArray(Charsets.UTF_8).size <= PostingDraftStore.MAX_SUBJECT_BYTES) { subject = it; save(s = it) } }, enabled = loaded, label = { Text("Subject") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), singleLine = true)
         ThreadReplyBar(text = text, onTextChange = { if (it.toByteArray(Charsets.UTF_8).size <= PostingDraftStore.MAX_TEXT_BYTES) { text = it; save(t = it) } }, onSend = {}, canSend = false, focusRequest = focusRequest, enabled = loaded)
