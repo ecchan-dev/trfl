@@ -25,7 +25,7 @@ internal fun CaptchaControl(target: PostingDraftKey) {
         TextButton(onClick = { open = true }) { Text("Load CAPTCHA") }
         return
     }
-    var error by remember(target, attempt) { mutableStateOf(false) }
+    var error by remember(target, attempt) { mutableStateOf<String?>(null) }
     var loading by remember(target, attempt) { mutableStateOf(true) }
     AlertDialog(
         onDismissRequest = { open = false },
@@ -35,10 +35,10 @@ internal fun CaptchaControl(target: PostingDraftKey) {
                 Text("Official CAPTCHA. Posting remains disabled; completion is not submitted.")
                 Text("Official site cookies and a CAPTCHA ticket may remain in app-private browser storage until app data is cleared.")
                 if (loading) Text("Loading…")
-                if (error) Text("Could not load the CAPTCHA. Check your connection and retry. Additional anti-bot checks may not be supported.")
+                if (error != null) Text("CAPTCHA could not load (${error}). Retry or close. Additional anti-bot checks may not be supported.")
                 key(target, attempt) {
-                    CaptchaWebView(target, Modifier.fillMaxWidth().height(360.dp),
-                        onLoaded = { loading = false }, onError = { loading = false; error = true })
+                    CaptchaWebView(target, Modifier.fillMaxWidth().height(if (error == null) 360.dp else 0.dp),
+                        onLoaded = { loading = false }, onError = { loading = false; error = it })
                 }
             }
         },
@@ -49,7 +49,7 @@ internal fun CaptchaControl(target: PostingDraftKey) {
 
 @SuppressLint("SetJavaScriptEnabled") // Required by the official interactive widget; no native JS bridge.
 @Composable
-private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded: () -> Unit, onError: () -> Unit) {
+private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded: () -> Unit, onError: (String) -> Unit) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     val active = remember { AtomicBoolean(true) }
     DisposableEffect(Unit) {
@@ -72,24 +72,27 @@ private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
-                    request.isForMainFrame || !captchaResourceAllowed(request.url.toString())
+                    captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame) == CaptchaRequestRoute.BLOCK
 
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
-                    if (captchaResourceAllowed(request.url.toString())) null else
-                        WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(byteArrayOf()))
+                    when (captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame)) {
+                        CaptchaRequestRoute.HOST -> WebResourceResponse("text/html", "UTF-8", ByteArrayInputStream(captchaHostHtml(target).toByteArray(Charsets.UTF_8)))
+                        CaptchaRequestRoute.REMOTE -> null
+                        CaptchaRequestRoute.BLOCK -> WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(byteArrayOf()))
+                    }
 
                 private fun dispatch(view: WebView, callback: () -> Unit) {
                     view.post { if (active.get()) callback() }
                 }
                 override fun onPageFinished(view: WebView, url: String?) { dispatch(view, onLoaded) }
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                    if (request.isForMainFrame || request.url.toString().startsWith("https://s.4cdn.org/js/tcaptcha.min.7.js") || request.url.host == "sys.4chan.org") dispatch(view, onError)
+                    if (request.isForMainFrame || request.url.toString().startsWith("https://s.4cdn.org/js/tcaptcha.min.7.js") || request.url.host == "sys.4chan.org") dispatch(view) { onError("WebView error ${error.errorCode}") }
                 }
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-                    if (request.isForMainFrame || request.url.host == "sys.4chan.org" || request.url.path == "/js/tcaptcha.min.7.js") dispatch(view, onError)
+                    if (request.isForMainFrame || request.url.host == "sys.4chan.org" || request.url.path == "/js/tcaptcha.min.7.js") dispatch(view) { onError("HTTP ${response.statusCode}") }
                 }
             }
-            loadDataWithBaseURL(CAPTCHA_BASE_URL, captchaHostHtml(target), "text/html", "UTF-8", null)
+            loadUrl(CAPTCHA_HOST_URL)
         }
     })
 }

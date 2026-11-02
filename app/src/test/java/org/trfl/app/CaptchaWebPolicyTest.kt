@@ -14,8 +14,21 @@ class CaptchaWebPolicyTest {
         }
     }
 
+    @Test fun syntheticRequestRoutingKeepsBootstrapLocal() {
+        assertEquals(CaptchaRequestRoute.HOST, captchaRequestRoute(CAPTCHA_HOST_URL, "GET", true))
+        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute(CAPTCHA_HOST_URL, "GET", false))
+        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute(CAPTCHA_HOST_URL, "POST", true))
+        listOf("$CAPTCHA_HOST_URL?x=1", "$CAPTCHA_HOST_URL/", "data:text/html,hello", "https://boards.4chan.org/").forEach {
+            assertEquals(it, CaptchaRequestRoute.BLOCK, captchaRequestRoute(it, "GET", true))
+        }
+        val remote = "https://sys.4chan.org/captcha?board=g"
+        assertEquals(CaptchaRequestRoute.REMOTE, captchaRequestRoute(remote, "GET", false))
+        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute(remote, "GET", true))
+        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute(remote, "POST", false))
+    }
+
     @Test fun syntheticHtmlContractForReplyAndNewThread() {
-        assertEquals("https://boards.4chan.org/", CAPTCHA_BASE_URL)
+        assertEquals("https://boards.4chan.org/__trfl_captcha_host", CAPTCHA_HOST_URL)
         val reply = captchaHostHtml(PostingDraftKey("g", 123))
         val thread = captchaHostHtml(PostingDraftKey("g", null))
         for (html in listOf(reply, thread)) {

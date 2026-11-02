@@ -17,7 +17,17 @@ internal fun captchaResourceAllowed(url: String): Boolean = try {
         }
 } catch (_: Exception) { false }
 
-internal const val CAPTCHA_BASE_URL = "https://boards.4chan.org/"
+// This exact URL is fulfilled locally and must never fall through to the network.
+internal const val CAPTCHA_HOST_URL = "https://boards.4chan.org/__trfl_captcha_host"
+
+internal enum class CaptchaRequestRoute { HOST, REMOTE, BLOCK }
+
+internal fun captchaRequestRoute(url: String, method: String, mainFrame: Boolean): CaptchaRequestRoute = when {
+    method != "GET" -> CaptchaRequestRoute.BLOCK
+    url == CAPTCHA_HOST_URL && mainFrame -> CaptchaRequestRoute.HOST
+    !mainFrame && captchaResourceAllowed(url) -> CaptchaRequestRoute.REMOTE
+    else -> CaptchaRequestRoute.BLOCK
+}
 
 internal fun captchaHostHtml(target: PostingDraftKey): String {
     requireCaptchaTarget(target)
