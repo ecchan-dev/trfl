@@ -9,6 +9,10 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -17,6 +21,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import java.io.ByteArrayInputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
+internal enum class CaptchaErrorSource { MAIN_FRAME, WIDGET_SCRIPT, CHALLENGE }
+internal enum class CaptchaErrorKind { WEB_VIEW, HTTP }
+internal data class CaptchaError(val source: CaptchaErrorSource, val kind: CaptchaErrorKind, val code: Int)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun CaptchaControl(target: PostingDraftKey) {
     var open by remember(target) { mutableStateOf(false) }
@@ -25,31 +34,54 @@ internal fun CaptchaControl(target: PostingDraftKey) {
         TextButton(onClick = { open = true }) { Text("Load CAPTCHA") }
         return
     }
-    var error by remember(target, attempt) { mutableStateOf<String?>(null) }
+    var error by remember(target, attempt) { mutableStateOf<CaptchaError?>(null) }
     var loading by remember(target, attempt) { mutableStateOf(true) }
-    AlertDialog(
-        onDismissRequest = { open = false },
-        title = { Text("CAPTCHA") },
-        text = {
-            Column {
-                Text("Official CAPTCHA. Posting remains disabled; completion is not submitted.")
-                Text("Official site cookies and a CAPTCHA ticket may remain in app-private browser storage until app data is cleared.")
-                if (loading) Text("Loading…")
-                if (error != null) Text("CAPTCHA could not load (${error}). Retry or close. Additional anti-bot checks may not be supported.")
-                key(target, attempt) {
-                    CaptchaWebView(target, Modifier.fillMaxWidth().height(if (error == null) 360.dp else 0.dp),
-                        onLoaded = { loading = false }, onError = { loading = false; error = it })
+    var infoOpen by remember { mutableStateOf(false) }
+    ModalBottomSheet(onDismissRequest = { open = false }) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val widgetHeight = (maxHeight * 0.65f).coerceIn(200.dp, 480.dp)
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("CAPTCHA", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                    IconButton(onClick = { open = false }) { Icon(Icons.Default.Close, contentDescription = "Close") }
+                }
+                Text(
+                    when {
+                        error != null -> "CAPTCHA could not load."
+                        loading -> "Loading CAPTCHA…"
+                        else -> "Complete the CAPTCHA below."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (error == null) {
+                    Spacer(Modifier.height(12.dp))
+                    key(target, attempt) {
+                        CaptchaWebView(target, Modifier.fillMaxWidth().height(widgetHeight),
+                            onLoaded = { loading = false }, onError = { loading = false; error = it })
+                    }
+                } else {
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = { attempt++ }) { Text("Retry") }
+                }
+                TextButton(onClick = { infoOpen = !infoOpen }) {
+                    Text(if (infoOpen) "Hide information" else "About CAPTCHA")
+                }
+                if (infoOpen) {
+                    Text(
+                        "Cookies and the CAPTCHA ticket may remain in app storage until app data is cleared. Posting is disabled; completion is not submitted.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = { attempt++ }) { Text("Retry") } },
-        dismissButton = { TextButton(onClick = { open = false }) { Text("Close") } },
-    )
+        }
+    }
 }
 
 @SuppressLint("SetJavaScriptEnabled") // Required by the official interactive widget; no native JS bridge.
 @Composable
-private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded: () -> Unit, onError: (String) -> Unit) {
+private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded: () -> Unit, onError: (CaptchaError) -> Unit) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     val active = remember { AtomicBoolean(true) }
     DisposableEffect(Unit) {
@@ -85,11 +117,21 @@ private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded
                     view.post { if (active.get()) callback() }
                 }
                 override fun onPageFinished(view: WebView, url: String?) { dispatch(view, onLoaded) }
+                private fun errorSource(request: WebResourceRequest): CaptchaErrorSource? = when {
+                    request.isForMainFrame -> CaptchaErrorSource.MAIN_FRAME
+                    request.url.host == "s.4cdn.org" && request.url.path == "/js/tcaptcha.min.7.js" -> CaptchaErrorSource.WIDGET_SCRIPT
+                    request.url.host == "sys.4chan.org" -> CaptchaErrorSource.CHALLENGE
+                    else -> null
+                }
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                    if (request.isForMainFrame || request.url.toString().startsWith("https://s.4cdn.org/js/tcaptcha.min.7.js") || request.url.host == "sys.4chan.org") dispatch(view) { onError("WebView error ${error.errorCode}") }
+                    val source = errorSource(request) ?: return
+                    val diagnostic = CaptchaError(source, CaptchaErrorKind.WEB_VIEW, error.errorCode)
+                    dispatch(view) { if (active.getAndSet(false)) onError(diagnostic) }
                 }
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-                    if (request.isForMainFrame || request.url.host == "sys.4chan.org" || request.url.path == "/js/tcaptcha.min.7.js") dispatch(view) { onError("HTTP ${response.statusCode}") }
+                    val source = errorSource(request) ?: return
+                    val diagnostic = CaptchaError(source, CaptchaErrorKind.HTTP, response.statusCode)
+                    dispatch(view) { if (active.getAndSet(false)) onError(diagnostic) }
                 }
             }
             loadUrl(CAPTCHA_HOST_URL)
