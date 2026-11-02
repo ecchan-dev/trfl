@@ -29,18 +29,55 @@ internal fun captchaRequestRoute(url: String, method: String, mainFrame: Boolean
     else -> CaptchaRequestRoute.BLOCK
 }
 
-internal fun captchaHostHtml(target: PostingDraftKey): String {
+// Categories deliberately contain no URL, query, response body, or credential data.
+internal enum class CaptchaEndpoint { HOST, WIDGET_SCRIPT, CHALLENGE, IMAGE, OTHER }
+
+internal fun captchaEndpoint(url: String): CaptchaEndpoint {
+    if (url == CAPTCHA_HOST_URL) return CaptchaEndpoint.HOST
+    if (!captchaResourceAllowed(url)) return CaptchaEndpoint.OTHER
+    val uri = URI(url)
+    return when {
+        uri.host == "sys.4chan.org" -> CaptchaEndpoint.CHALLENGE
+        uri.rawPath == "/js/tcaptcha.min.7.js" -> CaptchaEndpoint.WIDGET_SCRIPT
+        else -> CaptchaEndpoint.IMAGE
+    }
+}
+
+internal fun captchaBlockedDiagnostic(url: String): String =
+    "Blocked by app policy (${captchaEndpoint(url).label()})"
+
+// Only use for REMOTE requests: locally generated responses are not server HTTP errors.
+internal fun captchaRemoteHttpDiagnostic(url: String, status: Int): String =
+    "Remote HTTP ${status.takeIf { it in 100..599 } ?: 0} (${captchaEndpoint(url).label()})"
+
+internal fun captchaNetworkDiagnostic(url: String): String =
+    "Network error (${captchaEndpoint(url).label()})"
+
+private fun CaptchaEndpoint.label(): String = when (this) {
+    CaptchaEndpoint.HOST -> "host"
+    CaptchaEndpoint.WIDGET_SCRIPT -> "widget script"
+    CaptchaEndpoint.CHALLENGE -> "challenge"
+    CaptchaEndpoint.IMAGE -> "image"
+    CaptchaEndpoint.OTHER -> "other resource"
+}
+
+internal fun captchaHostHtml(target: PostingDraftKey, darkMode: Boolean = false): String {
     requireCaptchaTarget(target)
     val thread = target.threadId ?: 0L
     return """<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>body { margin: 8px; font: 14px sans-serif; } dialog { max-width: 90vw; }</style>
+<style>
+body { margin: 8px; font: 14px sans-serif; }
+#captcha { max-width: 100%; }
+#js-t-ext-cnt { box-sizing: border-box; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; }
+#js-t-ext-cnt input, #js-t-ext-cnt img { max-width: 100%; height: auto; }
+</style>
 <script src="https://s.4cdn.org/js/tcaptcha.min.7.js"></script></head>
 <body><div id="captcha"></div><script>
 if (typeof TCaptcha !== 'undefined') {
   TCaptcha.loadTicketCaptcha = TCaptcha.buildTicketCaptcha = function() {
     TCaptcha.setTaskNodeContent('Additional hCaptcha verification is not supported in this app.');
   };
-  TCaptcha.init(document.getElementById('captcha'), '${target.board}', $thread);
+  TCaptcha.init(document.getElementById('captcha'), '${target.board}', $thread, null, $darkMode);
 } else document.body.textContent = 'Unable to load CAPTCHA. Close and retry.';
 </script></body></html>"""
 }

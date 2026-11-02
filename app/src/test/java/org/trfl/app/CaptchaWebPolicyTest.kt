@@ -6,7 +6,7 @@ import org.junit.Test
 // Synthetic, offline fixtures: no challenge endpoint or network access.
 class CaptchaWebPolicyTest {
     @Test fun syntheticOfficialResourcesAndBlockedNavigation() {
-        assertTrue(captchaResourceAllowed("https://sys.4chan.org/captcha?board=g&thread_id=123"))
+        assertTrue(captchaResourceAllowed("https://sys.4chan.org/captcha?ext=1&board=g&thread_id=123&ticket=synthetic"))
         assertTrue(captchaResourceAllowed("https://s.4cdn.org/js/tcaptcha.min.7.js"))
         assertTrue(captchaResourceAllowed("https://s.4cdn.org/image/temp/april2026/root/a.png"))
         listOf("http://sys.4chan.org/captcha", "https://sys.4chan.org.evil.test/captcha", "https://sys.4chan.org/other", "https://user@sys.4chan.org/captcha", "file:///captcha", "https://s.4cdn.org/other", "https://s.4cdn.org/image/temp/april2026/../other", "https://s.4cdn.org/image/temp/april2026/%2e%2e/other", "https://js.hcaptcha.com/1/api.js?render=explicit").forEach {
@@ -27,6 +27,17 @@ class CaptchaWebPolicyTest {
         assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute(remote, "POST", false))
     }
 
+    @Test fun syntheticDiagnosticsNeverExposeRequestData() {
+        val challenge = "https://sys.4chan.org/captcha?ticket=secret"
+        assertEquals(CaptchaEndpoint.CHALLENGE, captchaEndpoint(challenge))
+        assertEquals(CaptchaEndpoint.WIDGET_SCRIPT, captchaEndpoint("https://s.4cdn.org/js/tcaptcha.min.7.js"))
+        assertEquals(CaptchaEndpoint.IMAGE, captchaEndpoint("https://s.4cdn.org/image/temp/april2026/root/file"))
+        assertEquals(CaptchaEndpoint.OTHER, captchaEndpoint("https://sys.4chan.org/secret?token=secret"))
+        assertEquals("Blocked by app policy (other resource)", captchaBlockedDiagnostic("https://sys.4chan.org/secret?token=secret"))
+        assertEquals("Remote HTTP 403 (challenge)", captchaRemoteHttpDiagnostic(challenge, 403))
+        assertEquals("Network error (challenge)", captchaNetworkDiagnostic(challenge))
+    }
+
     @Test fun syntheticHtmlContractForReplyAndNewThread() {
         assertEquals("https://boards.4chan.org/__trfl_captcha_host", CAPTCHA_HOST_URL)
         val reply = captchaHostHtml(PostingDraftKey("g", 123))
@@ -39,7 +50,10 @@ class CaptchaWebPolicyTest {
             assertFalse(html.contains(".submit("))
             assertFalse(html.contains("addJavascriptInterface"))
         }
-        assertTrue(reply.contains("TCaptcha.init(document.getElementById('captcha'), 'g', 123)"))
-        assertTrue(thread.contains("TCaptcha.init(document.getElementById('captcha'), 'g', 0)"))
+        assertTrue(reply.contains("TCaptcha.init(document.getElementById('captcha'), 'g', 123, null, false)"))
+        assertTrue(thread.contains("TCaptcha.init(document.getElementById('captcha'), 'g', 0, null, false)"))
+        assertTrue(captchaHostHtml(PostingDraftKey("g", 123), true).contains("'g', 123, null, true)"))
+        assertTrue(reply.contains("#captcha { max-width: 100%; }"))
+        assertTrue(reply.contains("#js-t-ext-cnt input, #js-t-ext-cnt img"))
     }
 }
