@@ -9,6 +9,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -21,9 +22,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import java.io.ByteArrayInputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal enum class CaptchaErrorSource { MAIN_FRAME, WIDGET_SCRIPT, CHALLENGE }
-internal enum class CaptchaErrorKind { WEB_VIEW, HTTP }
-internal data class CaptchaError(val source: CaptchaErrorSource, val kind: CaptchaErrorKind, val code: Int)
+internal enum class CaptchaErrorSource { MAIN_FRAME, WIDGET_SCRIPT, CHALLENGE, OTHER }
+internal enum class CaptchaErrorKind { WEB_VIEW, HTTP, POLICY }
+internal data class CaptchaError(val source: CaptchaErrorSource, val kind: CaptchaErrorKind, val code: Int, val detail: String? = null)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +63,7 @@ internal fun CaptchaControl(target: PostingDraftKey) {
                     }
                 } else {
                     Spacer(Modifier.height(12.dp))
+                    error?.let { Text(it.detail ?: "${it.source.name.lowercase().replace('_', ' ')}: ${it.kind.name} ${it.code}", style = MaterialTheme.typography.bodySmall) }
                     Button(onClick = { attempt++ }) { Text("Retry") }
                 }
                 TextButton(onClick = { infoOpen = !infoOpen }) {
@@ -82,6 +84,7 @@ internal fun CaptchaControl(target: PostingDraftKey) {
 @SuppressLint("SetJavaScriptEnabled") // Required by the official interactive widget; no native JS bridge.
 @Composable
 private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded: () -> Unit, onError: (CaptchaError) -> Unit) {
+    val darkMode = isSystemInDarkTheme()
     var webView by remember { mutableStateOf<WebView?>(null) }
     val active = remember { AtomicBoolean(true) }
     DisposableEffect(Unit) {
@@ -108,9 +111,13 @@ private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded
 
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                     when (captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame)) {
-                        CaptchaRequestRoute.HOST -> WebResourceResponse("text/html", "UTF-8", ByteArrayInputStream(captchaHostHtml(target).toByteArray(Charsets.UTF_8)))
+                        CaptchaRequestRoute.HOST -> WebResourceResponse("text/html", "UTF-8", ByteArrayInputStream(captchaHostHtml(target, darkMode).toByteArray(Charsets.UTF_8)))
                         CaptchaRequestRoute.REMOTE -> null
-                        CaptchaRequestRoute.BLOCK -> WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(byteArrayOf()))
+                        CaptchaRequestRoute.BLOCK -> {
+                            val diagnostic = CaptchaError(CaptchaErrorSource.OTHER, CaptchaErrorKind.POLICY, 0, captchaBlockedDiagnostic(request.url.toString()))
+                            dispatch(view) { if (active.getAndSet(false)) onError(diagnostic) }
+                            WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(byteArrayOf()))
+                        }
                     }
 
                 private fun dispatch(view: WebView, callback: () -> Unit) {
@@ -129,8 +136,9 @@ private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded
                     dispatch(view) { if (active.getAndSet(false)) onError(diagnostic) }
                 }
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-                    val source = errorSource(request) ?: return
-                    val diagnostic = CaptchaError(source, CaptchaErrorKind.HTTP, response.statusCode)
+                    if (captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame) != CaptchaRequestRoute.REMOTE) return
+                    val source = errorSource(request) ?: CaptchaErrorSource.OTHER
+                    val diagnostic = CaptchaError(source, CaptchaErrorKind.HTTP, response.statusCode, captchaRemoteHttpDiagnostic(request.url.toString(), response.statusCode))
                     dispatch(view) { if (active.getAndSet(false)) onError(diagnostic) }
                 }
             }
