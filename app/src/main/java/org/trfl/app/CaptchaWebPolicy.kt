@@ -20,14 +20,26 @@ internal fun captchaResourceAllowed(url: String): Boolean = try {
 // This exact URL is fulfilled locally and must never fall through to the network.
 internal const val CAPTCHA_HOST_URL = "https://boards.4chan.org/__trfl_captcha_host"
 
-internal enum class CaptchaRequestRoute { HOST, REMOTE, BLOCK }
+internal enum class CaptchaRequestRoute { HOST, REMOTE, INERT, BLOCK }
 
 internal fun captchaRequestRoute(url: String, method: String, mainFrame: Boolean): CaptchaRequestRoute = when {
     method != "GET" -> CaptchaRequestRoute.BLOCK
     url == CAPTCHA_HOST_URL && mainFrame -> CaptchaRequestRoute.HOST
+    !mainFrame && (url == "about:blank" || url.matches(Regex("data:image/png;base64,[A-Za-z0-9+/]*={0,2}"))) -> CaptchaRequestRoute.INERT
     !mainFrame && captchaResourceAllowed(url) -> CaptchaRequestRoute.REMOTE
     else -> CaptchaRequestRoute.BLOCK
 }
+
+internal fun captchaCriticalBlocked(url: String): Boolean = try {
+    val uri = URI(url)
+    uri.scheme == "https" && uri.userInfo == null && (uri.port == -1 || uri.port == 443) &&
+        ((uri.host == "sys.4chan.org" && uri.rawPath == "/captcha") ||
+            (uri.host == "s.4cdn.org" && uri.rawPath == "/js/tcaptcha.min.7.js"))
+} catch (_: Exception) { false }
+
+internal enum class CaptchaBlockedImpact { FATAL, OPTIONAL }
+internal fun captchaBlockedImpact(url: String): CaptchaBlockedImpact =
+    if (captchaCriticalBlocked(url)) CaptchaBlockedImpact.FATAL else CaptchaBlockedImpact.OPTIONAL
 
 // Categories deliberately contain no URL, query, response body, or credential data.
 internal enum class CaptchaEndpoint { HOST, WIDGET_SCRIPT, CHALLENGE, IMAGE, OTHER }
@@ -43,8 +55,23 @@ internal fun captchaEndpoint(url: String): CaptchaEndpoint {
     }
 }
 
-internal fun captchaBlockedDiagnostic(url: String): String =
-    "Blocked by app policy (${captchaEndpoint(url).label()})"
+// Only fixed classifications and a syntactically public DNS name may leave this function.
+internal fun captchaBlockedDiagnostic(url: String, method: String, mainFrame: Boolean): String? = try {
+    val uri = URI(url)
+    if (uri.rawPath == "/favicon.ico") null else {
+        val host = uri.host?.lowercase(java.util.Locale.ROOT)
+        val labels = host?.split('.') ?: emptyList()
+        val publicHost = host != null && host.length <= 253 && labels.size >= 2 &&
+            labels.all { it.length in 1..63 && it.matches(Regex("[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")) } &&
+            labels.last().matches(Regex("[a-z]{2,63}")) &&
+            labels.last() !in setOf("local", "localhost", "internal", "test", "invalid", "example", "onion")
+        if (!publicHost || uri.userInfo != null) null else {
+            val scheme = when (uri.scheme?.lowercase(java.util.Locale.ROOT)) { "https" -> "HTTPS"; "http" -> "HTTP"; else -> "other" }
+            val verb = when (method) { "GET", "POST", "HEAD" -> method; else -> "other" }
+            "$host · $scheme · $verb · ${if (mainFrame) "main frame" else "subresource"}"
+        }
+    }
+} catch (_: Exception) { null }
 
 // Only use for REMOTE requests: locally generated responses are not server HTTP errors.
 internal fun captchaRemoteHttpDiagnostic(url: String, status: Int): String =

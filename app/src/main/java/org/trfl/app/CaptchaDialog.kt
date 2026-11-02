@@ -38,6 +38,7 @@ internal fun CaptchaControl(target: PostingDraftKey) {
     var error by remember(target, attempt) { mutableStateOf<CaptchaError?>(null) }
     var loading by remember(target, attempt) { mutableStateOf(true) }
     var infoOpen by remember { mutableStateOf(false) }
+    val policyHints = remember(target, attempt) { mutableStateListOf<String>() }
     ModalBottomSheet(onDismissRequest = { open = false }) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val widgetHeight = (maxHeight * 0.65f).coerceIn(200.dp, 480.dp)
@@ -59,17 +60,26 @@ internal fun CaptchaControl(target: PostingDraftKey) {
                     Spacer(Modifier.height(12.dp))
                     key(target, attempt) {
                         CaptchaWebView(target, Modifier.fillMaxWidth().height(widgetHeight),
-                            onLoaded = { loading = false }, onError = { loading = false; error = it })
+                            onLoaded = { loading = false }, onError = { loading = false; error = it },
+                            onPolicyHint = { if (it !in policyHints && policyHints.size < 4) policyHints.add(it) })
                     }
                 } else {
                     Spacer(Modifier.height(12.dp))
                     error?.let { Text(it.detail ?: "${it.source.name.lowercase().replace('_', ' ')}: ${it.kind.name} ${it.code}", style = MaterialTheme.typography.bodySmall) }
                     Button(onClick = { attempt++ }) { Text("Retry") }
                 }
+                if (policyHints.isNotEmpty() && !infoOpen) {
+                    Text("CAPTCHA stuck? See About CAPTCHA.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 TextButton(onClick = { infoOpen = !infoOpen }) {
                     Text(if (infoOpen) "Hide information" else "About CAPTCHA")
                 }
                 if (infoOpen) {
+                    if (policyHints.isNotEmpty()) {
+                        Text("If CAPTCHA is stuck, retry once and report these domains. This information stays on your device.", style = MaterialTheme.typography.bodySmall)
+                        policyHints.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                        TextButton(onClick = { attempt++ }) { Text("Retry") }
+                    }
                     Text(
                         "Cookies and the CAPTCHA ticket may remain in app storage until app data is cleared. Posting is disabled; completion is not submitted.",
                         style = MaterialTheme.typography.bodySmall,
@@ -83,7 +93,7 @@ internal fun CaptchaControl(target: PostingDraftKey) {
 
 @SuppressLint("SetJavaScriptEnabled") // Required by the official interactive widget; no native JS bridge.
 @Composable
-private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded: () -> Unit, onError: (CaptchaError) -> Unit) {
+private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded: () -> Unit, onError: (CaptchaError) -> Unit, onPolicyHint: (String) -> Unit) {
     val darkMode = isSystemInDarkTheme()
     var webView by remember { mutableStateOf<WebView?>(null) }
     val active = remember { AtomicBoolean(true) }
@@ -106,16 +116,27 @@ private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded
             settings.saveFormData = false
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
             webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
-                    captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame) == CaptchaRequestRoute.BLOCK
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame) != CaptchaRequestRoute.BLOCK) return false
+                    reportBlocked(view, request)
+                    return true
+                }
+
+                private fun reportBlocked(view: WebView, request: WebResourceRequest) {
+                    val url = request.url.toString()
+                    if (captchaBlockedImpact(url) == CaptchaBlockedImpact.FATAL) {
+                        dispatch(view) { if (active.getAndSet(false)) onError(CaptchaError(CaptchaErrorSource.OTHER, CaptchaErrorKind.POLICY, 0, "Required CAPTCHA resource blocked by app policy.")) }
+                    } else {
+                        captchaBlockedDiagnostic(url, request.method, request.isForMainFrame)?.let { hint -> dispatch(view) { onPolicyHint(hint) } }
+                    }
+                }
 
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                     when (captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame)) {
                         CaptchaRequestRoute.HOST -> WebResourceResponse("text/html", "UTF-8", ByteArrayInputStream(captchaHostHtml(target, darkMode).toByteArray(Charsets.UTF_8)))
-                        CaptchaRequestRoute.REMOTE -> null
+                        CaptchaRequestRoute.REMOTE, CaptchaRequestRoute.INERT -> null
                         CaptchaRequestRoute.BLOCK -> {
-                            val diagnostic = CaptchaError(CaptchaErrorSource.OTHER, CaptchaErrorKind.POLICY, 0, captchaBlockedDiagnostic(request.url.toString()))
-                            dispatch(view) { if (active.getAndSet(false)) onError(diagnostic) }
+                            reportBlocked(view, request)
                             WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(byteArrayOf()))
                         }
                     }
@@ -131,13 +152,15 @@ private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded
                     else -> null
                 }
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                    val route = captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame)
+                    if (route != CaptchaRequestRoute.HOST && route != CaptchaRequestRoute.REMOTE) return
                     val source = errorSource(request) ?: return
                     val diagnostic = CaptchaError(source, CaptchaErrorKind.WEB_VIEW, error.errorCode)
                     dispatch(view) { if (active.getAndSet(false)) onError(diagnostic) }
                 }
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
                     if (captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame) != CaptchaRequestRoute.REMOTE) return
-                    val source = errorSource(request) ?: CaptchaErrorSource.OTHER
+                    val source = errorSource(request) ?: return
                     val diagnostic = CaptchaError(source, CaptchaErrorKind.HTTP, response.statusCode, captchaRemoteHttpDiagnostic(request.url.toString(), response.statusCode))
                     dispatch(view) { if (active.getAndSet(false)) onError(diagnostic) }
                 }

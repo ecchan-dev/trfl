@@ -21,6 +21,11 @@ class CaptchaWebPolicyTest {
         listOf("$CAPTCHA_HOST_URL?x=1", "$CAPTCHA_HOST_URL/", "data:text/html,hello", "https://boards.4chan.org/").forEach {
             assertEquals(it, CaptchaRequestRoute.BLOCK, captchaRequestRoute(it, "GET", true))
         }
+        assertEquals(CaptchaRequestRoute.INERT, captchaRequestRoute("about:blank", "GET", false))
+        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute("about:blank", "GET", true))
+        assertEquals(CaptchaRequestRoute.INERT, captchaRequestRoute("data:image/png;base64,aGVsbG8=", "GET", false))
+        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute("data:text/html;base64,PHNjcmlwdD4=", "GET", false))
+        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute("https://boards.4chan.org/favicon.ico", "GET", false))
         val remote = "https://sys.4chan.org/captcha?board=g"
         assertEquals(CaptchaRequestRoute.REMOTE, captchaRequestRoute(remote, "GET", false))
         assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute(remote, "GET", true))
@@ -33,7 +38,14 @@ class CaptchaWebPolicyTest {
         assertEquals(CaptchaEndpoint.WIDGET_SCRIPT, captchaEndpoint("https://s.4cdn.org/js/tcaptcha.min.7.js"))
         assertEquals(CaptchaEndpoint.IMAGE, captchaEndpoint("https://s.4cdn.org/image/temp/april2026/root/file"))
         assertEquals(CaptchaEndpoint.OTHER, captchaEndpoint("https://sys.4chan.org/secret?token=secret"))
-        assertEquals("Blocked by app policy (other resource)", captchaBlockedDiagnostic("https://sys.4chan.org/secret?token=secret"))
+        assertEquals("sys.4chan.org · HTTPS · GET · subresource", captchaBlockedDiagnostic("https://sys.4chan.org/secret?token=secret", "GET", false))
+        assertNull(captchaBlockedDiagnostic("https://user:password@sys.4chan.org/secret?token=secret", "GET", false))
+        assertNull(captchaBlockedDiagnostic("https://boards.4chan.org/favicon.ico", "GET", false))
+        assertNull(captchaBlockedDiagnostic("http://127.0.0.1/secret", "GET", false))
+        assertTrue(captchaCriticalBlocked("https://sys.4chan.org/captcha?ticket=secret"))
+        assertEquals(CaptchaBlockedImpact.OPTIONAL, captchaBlockedImpact("https://sys.4chan.org/favicon.ico"))
+        assertEquals(CaptchaBlockedImpact.OPTIONAL, captchaBlockedImpact("https://unknown.example.org/tracker"))
+        assertEquals(CaptchaBlockedImpact.FATAL, captchaBlockedImpact("https://sys.4chan.org/captcha"))
         assertEquals("Remote HTTP 403 (challenge)", captchaRemoteHttpDiagnostic(challenge, 403))
         assertEquals("Network error (challenge)", captchaNetworkDiagnostic(challenge))
     }
