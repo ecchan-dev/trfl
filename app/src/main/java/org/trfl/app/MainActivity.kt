@@ -1,22 +1,15 @@
 package org.trfl.app
 
 import android.os.Bundle
-import android.text.Html
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.paneTitle
-import androidx.compose.foundation.gestures.transformable
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -28,8 +21,6 @@ import androidx.compose.animation.core.spring
 import kotlinx.coroutines.flow.first
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.expandVertically
@@ -37,22 +28,15 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.foundation.text.ClickableText
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.SpanStyle
 import android.content.Intent
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -61,7 +45,6 @@ import androidx.compose.ui.*
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -81,8 +64,6 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.drop
 import org.json.*
-import java.net.HttpURLConnection
-import java.net.URL
 
 class MainActivity : ComponentActivity() {
     private var incomingLink by mutableStateOf<String?>(null)
@@ -109,21 +90,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-data class Board(val id: String, val title: String, val safe: Boolean)
-data class Post(val id: Long, val title: String, val body: String, val image: String?, val thumb: String?, val replies: Int,
-    val images: Int = 0, val created: Long = 0, val lastReply: Long = 0, val video: Boolean = false) {
-    val isVideo: Boolean get() = video || image?.substringBefore('?')?.let { it.endsWith(".webm", true) || it.endsWith(".mp4", true) } == true
-}
-fun plain(value: String): String = Html.fromHtml(value, Html.FROM_HTML_MODE_LEGACY).toString().trim()
-fun parsePost(p: JSONObject, board: String): Post {
-    val tim = p.optLong("tim")
-    return Post(p.getLong("no"), plain(p.optString("sub")), plain(p.optString("com")),
-        if (tim > 0) "https://i.4cdn.org/$board/$tim${p.optString("ext")}" else null,
-        if (tim > 0) "https://i.4cdn.org/$board/${tim}s.jpg" else null, p.optInt("replies"), p.optInt("images"), p.optLong("time"),
-        p.optLong("last_modified", p.optJSONArray("last_replies")?.let { replies ->
-            (0 until replies.length()).maxOfOrNull { replies.getJSONObject(it).optLong("time") }
-        } ?: p.optLong("time")))
-}
+// Thread saves run for the process lifetime so rotation or window changes don't cancel them;
+// jobs and live status live here so a recreated composition still sees them.
+private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+private val saveJobs = mutableMapOf<String, Job>()
+private val saveStatusState = mutableStateOf(emptyMap<String, String>())
+private fun threadTitle(op: Post) = op.title.ifBlank { op.body.replace(Regex("\\s+"), " ").trim().take(80) }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun Trfl(incomingLink: String? = null, consumeLink: () -> Unit = {}) {
@@ -137,8 +109,7 @@ fun parsePost(p: JSONObject, board: String): Post {
     var showDownloads by rememberSaveable { mutableStateOf(false) }
     var showDonation by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val saveJobs = remember { mutableMapOf<String, Job>() }
-    var saveStatus by remember { mutableStateOf(emptyMap<String, String>()) }
+    var saveStatus by saveStatusState
     var archived by remember { mutableStateOf(prefs.getStringSet("archived", emptySet())!!.toSet()) }
     var showArchive by rememberSaveable { mutableStateOf(false) }
     var dead by remember { mutableStateOf(prefs.getStringSet("dead", emptySet())!!.toSet()) }
@@ -189,6 +160,13 @@ fun parsePost(p: JSONObject, board: String): Post {
         val total = prefs.getInt("total:$entry", 0)
         (total - prefs.getInt("seen:$entry", total)).coerceAtLeast(0)
     }) }
+    var threadTitles by remember { mutableStateOf((watched + saved).mapNotNull { entry -> prefs.getString("title:$entry", null)?.takeIf { it.isNotBlank() }?.let { entry to it } }.toMap()) }
+    fun storeTitle(entry: String, op: Post) {
+        val title = threadTitle(op)
+        if (title.isNotBlank() && threadTitles[entry] != title) { threadTitles = threadTitles + (entry to title); prefs.edit().putString("title:$entry", title).apply() }
+    }
+    val watchCheckedAt = remember { mutableMapOf<String, Long>() }
+    var watchReloadSeen by remember { mutableIntStateOf(0) }
     DisposableEffect(prefs, watched) {
         val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, changed ->
             if (changed?.startsWith("total:") == true || changed?.startsWith("seen:") == true) {
@@ -203,34 +181,45 @@ fun parsePost(p: JSONObject, board: String): Post {
     }
     val watchedHasUnread = watched.any { (watchUnread[it] ?: 0) > 0 }
     var imagesOnly by rememberSaveable(board, thread) { mutableStateOf(false) }
-    var destination by rememberSaveable { mutableStateOf("Boards") }
+    var destination by rememberSaveable { mutableStateOf(Destination.BOARDS) }
     var showScrollTop by remember(destination, board, thread, imagesOnly, catalog) { mutableStateOf(false) }
+    var listAtTop by remember(destination, board, thread, catalog) { mutableStateOf(true) }
     var boardsResumeBoard by rememberSaveable { mutableStateOf("") }
     var boardsResumeThread by rememberSaveable { mutableLongStateOf(0L) }
     SideEffect {
-        if (destination == "Boards") { boardsResumeBoard = board; boardsResumeThread = thread }
+        if (destination == Destination.BOARDS) { boardsResumeBoard = board; boardsResumeThread = thread }
     }
     fun selectDestination(label: String) {
         if (destination == label) {
-            if (label == "Boards") {
+            if (label == Destination.BOARDS) {
+                // Board or thread list scrolled down: first tap returns to the top, the next one goes up a level.
+                if (thread == 0L && !listAtTop) { scrollTop++; return }
                 if (thread != 0L) thread = 0 else if (board.isNotEmpty()) board = ""
                 query = ""
-            }
+            } else if ((label == Destination.WATCHED || label == Destination.SAVES) && board.isEmpty()) scrollTop++
             return
         }
         destination = label
-        if (label == "Boards") { board = boardsResumeBoard; thread = boardsResumeThread }
-        else if (label != "Settings") { board = ""; thread = 0 }
+        if (label == Destination.BOARDS) { board = boardsResumeBoard; thread = boardsResumeThread }
+        else if (label != Destination.SETTINGS) { board = ""; thread = 0 }
         query = ""
     }
-    LaunchedEffect(destination) { if (destination == "Bookmarks") destination = "Saves" }
+    LaunchedEffect(destination) { if (destination == Destination.LEGACY_BOOKMARKS) destination = Destination.SAVES }
     LaunchedEffect(incomingLink) {
         parseThreadLink(incomingLink)?.let { target ->
-            destination = "Boards"; board = target.board; thread = target.thread
+            destination = Destination.BOARDS; board = target.board; thread = target.thread
         }
         if (incomingLink != null) consumeLink()
     }
-    val onlySaved = destination == "Saves"
+    LaunchedEffect(Unit) {
+        // Drop per-thread read counters and titles for threads that are neither watched nor saved (keep the open one).
+        val keep = watched + saved + "$board/$thread"
+        withContext(Dispatchers.IO) {
+            val stale = prefs.all.keys.filter { k -> (k.startsWith("seen:") || k.startsWith("total:") || k.startsWith("title:")) && k.substringAfter(':') !in keep }
+            if (stale.isNotEmpty()) prefs.edit().also { editor -> stale.forEach { editor.remove(it) } }.apply()
+        }
+    }
+    val onlySaved = destination == Destination.SAVES
     var searchOpen by rememberSaveable(board, thread, destination) { mutableStateOf(false) }
     val searchFocus = remember { FocusRequester() }
     var boardColors by rememberSaveable { mutableStateOf(prefs.getBoolean("boardColors", true)) }
@@ -250,8 +239,8 @@ fun parsePost(p: JSONObject, board: String): Post {
     var pageMenu by remember(board, thread, destination) { mutableStateOf(false) }
     var sortMenu by remember(board, thread, destination) { mutableStateOf(false) }
     var threadSort by rememberSaveable(board) { mutableStateOf(ThreadSort.fromSaved(prefs.getString("sort:$board", null)).name) }
-    val route = PageRoute(destination, if (destination == "Settings") "" else board, if (destination == "Settings") 0 else thread).key
-    var history by rememberSaveable { mutableStateOf(listOf(PageRoute("Boards").key)) }
+    val route = PageRoute(destination, if (destination == Destination.SETTINGS) "" else board, if (destination == Destination.SETTINGS) 0 else thread).key
+    var history by rememberSaveable { mutableStateOf(listOf(PageRoute(Destination.BOARDS).key)) }
     SideEffect { history = nextHistory(history, route) }
     val cachedPosts = remember(reload, demo) { linkedMapOf<String, Pair<Long, List<Post>>>() }
     val apiPath = if (board.isEmpty()) "boards.json" else if (thread == 0L) "$board/catalog.json" else "$board/thread/$thread.json"
@@ -260,7 +249,7 @@ fun parsePost(p: JSONObject, board: String): Post {
     var scrollTravel by remember { mutableFloatStateOf(0f) }
     val barThreshold = with(LocalDensity.current) { 24.dp.toPx() }
     val touchExploration = (context.getSystemService(android.content.Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager).isTouchExplorationEnabled
-    val showBars = barsVisible || searchOpen || destination == "Settings" || touchExploration
+    val showBars = barsVisible || searchOpen || destination == Destination.SETTINGS || touchExploration
     LaunchedEffect(route, scrollTop) { barsVisible = true; scrollTravel = 0f }
     val barScroll = remember(barThreshold) {
         object : NestedScrollConnection {
@@ -276,11 +265,22 @@ fun parsePost(p: JSONObject, board: String): Post {
         }
     }
     LaunchedEffect(destination, board, reload, demo) {
-        if ((destination == "Watched" || destination == "Saves") && board.isEmpty()) {
-            for (entry in if (destination == "Watched") watched else saved) {
+        // Only an explicit refresh (reload bump) re-checks threads that were checked moments ago.
+        val explicit = reload != watchReloadSeen
+        watchReloadSeen = reload
+        if ((destination == Destination.WATCHED || destination == Destination.SAVES) && board.isEmpty()) {
+            for (entry in if (destination == Destination.WATCHED) watched else saved) {
                 if (demo) { watchStatus = watchStatus + (entry to "Preview thread"); continue }
+                val checkedAt = watchCheckedAt[entry]
+                if (!explicit && checkedAt != null && System.currentTimeMillis() - checkedAt in 0L until 120_000L) {
+                    val total = prefs.getInt("total:$entry", -1)
+                    if (entry in dead) watchStatus = watchStatus + (entry to "Dead thread")
+                    else if (total >= 0) watchStatus = watchStatus + (entry to "${(total - prefs.getInt("seen:$entry", total)).coerceAtLeast(0)} new · ${(total - 1).coerceAtLeast(0)} replies")
+                    continue
+                }
                 try {
                     val array = JSONObject(request("${entry.substringBefore('/')}/thread/${entry.substringAfter('/')}.json", force = true)).getJSONArray("posts")
+                    if (array.length() > 0) storeTitle(entry, parsePost(array.getJSONObject(0), entry.substringBefore('/')))
                     val count = array.length()
                     val seen = prefs.getInt("seen:$entry", count)
                     watchUnread = watchUnread + (entry to (count - seen).coerceAtLeast(0))
@@ -293,6 +293,7 @@ fun parsePost(p: JSONObject, board: String): Post {
                     if (e is ApiException && e.status == 404) markDead(entry)
                     watchStatus = watchStatus + (entry to if (entry in dead) "Dead thread" else "Unavailable · retry with Refresh")
                 }
+                watchCheckedAt[entry] = System.currentTimeMillis()
                 delay(1100) // Respect the public API; only check on opening this tab or explicit refresh.
             }
         }
@@ -320,6 +321,7 @@ fun parsePost(p: JSONObject, board: String): Post {
                 posts = (0 until array.length()).map { parsePost(array.getJSONObject(it), board) }
                 if (array.getJSONObject(0).optInt("archived") == 1) markDead(key)
                 prefs.edit().putInt("seen:$key", posts.size).putInt("total:$key", posts.size).apply()
+                posts.firstOrNull()?.let { storeTitle(key, it) }
                 watchUnread = watchUnread + (key to 0)
                 watchStatus = watchStatus + (key to "0 new · ${posts.size - 1} replies")
             }
@@ -346,7 +348,7 @@ fun parsePost(p: JSONObject, board: String): Post {
             query = ""; searchOpen = false
         }
     }
-    val visibleBoardIds = orderBoards(boards, boardOrder, favorites).filter { (it.safe || adult) && (!favoritesOnly || it.id in favorites) }.map { it.id }
+    val visibleBoardIds = visibleBoards(boards, boardOrder, favorites, adult, favoritesOnly).map { it.id }
     val swipeBoards = (if (board in boardSequence) boardSequence else visibleBoardIds).filter { id -> adult || boards.find { it.id == id }?.safe != false }
     val boardSlide = remember { Animatable(0f) }
     var boardDrag by remember { mutableFloatStateOf(0f) }
@@ -383,7 +385,7 @@ fun parsePost(p: JSONObject, board: String): Post {
         }
     }
     val swipeThreshold = with(LocalDensity.current) { 72.dp.toPx() }
-    val boardSwipe = if (catalog && board.isNotEmpty() && thread == 0L && destination != "Settings") Modifier
+    val boardSwipe = if (catalog && board.isNotEmpty() && thread == 0L && destination != Destination.SETTINGS) Modifier
         .pointerInput(board, swipeBoards, swipeThreshold, history) {
             detectHorizontalDragGestures(onDragStart = { if (!boardSliding) boardDrag = 0f }, onDragCancel = { cancelBoardSwipe() },
                 onDragEnd = { if (boardDrag < -swipeThreshold) switchBoard(1) else if (boardDrag > swipeThreshold) switchBoard(-1) else cancelBoardSwipe() },
@@ -443,15 +445,15 @@ fun parsePost(p: JSONObject, board: String): Post {
     Scaffold(modifier = Modifier.imePadding().nestedScroll(barScroll),
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         bottomBar = {
-        if (thread != 0L && destination == "Boards") {
+        if (thread != 0L && destination == Destination.BOARDS) {
             key(board, thread) {
                 PostingComposer(PostingDraftKey(board, thread), replyQuoteId, replyFocusRequest, draftStore, onQuoteHandled = { replyQuoteId = null })
             }
         } else
         AnimatedVisibility(!wideLayout && showBars, enter = slideInVertically { it } + expandVertically(), exit = slideOutVertically { it } + shrinkVertically()) {
         NavigationBar {
-            listOf("Boards" to Icons.Default.Dashboard, "Watched" to Icons.Default.Visibility, "Saves" to Icons.Default.Bookmark, "Settings" to Icons.Default.Settings).forEach { (label, icon) ->
-                NavigationBarItem(selected = destination == label, onClick = { selectDestination(label) }, icon = { BadgedBox(badge = { if (label == "Watched" && watchedHasUnread) Badge() }) { Icon(icon, if (label == "Watched" && watchedHasUnread) "New replies" else null) } }, label = { Text(label) })
+            navDestinations.forEach { item ->
+                NavigationBarItem(selected = destination == item.label, onClick = { selectDestination(item.label) }, icon = { NavDestinationIcon(item, watchedHasUnread) }, label = { Text(item.label) })
             }
         }
         }
@@ -464,16 +466,16 @@ fun parsePost(p: JSONObject, board: String): Post {
                     placeholder = { Text(if (board.isEmpty()) "Find a board" else "Search loaded posts") },
                     colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
                 LaunchedEffect(Unit) { searchFocus.requestFocus() }
-            } else AnimatedContent(targetState = if (destination == "Settings") "Settings" else if (board.isEmpty()) (if (onlySaved) "Saves" else if (destination == "Watched") "Watched" else "Trfl") else if (thread == 0L) "/$board/" else "/$board/ · $thread", label = "App bar title") { title -> Text(title, maxLines = 1, modifier = Modifier.clickable(onClickLabel = "Scroll to top") { scrollTop++ }) }
+            } else AnimatedContent(targetState = if (destination == Destination.SETTINGS) Destination.SETTINGS else if (board.isEmpty()) (if (onlySaved) Destination.SAVES else if (destination == Destination.WATCHED) Destination.WATCHED else "Trfl") else if (thread == 0L) "/$board/" else "/$board/ · $thread", label = "App bar title") { title -> Text(title, maxLines = 1, modifier = Modifier.clickable(onClickLabel = "Scroll to top") { scrollTop++ }) }
         }, navigationIcon = {
             if (searchOpen) IconButton(onClick = { searchOpen = false; query = "" }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close search") }
-            else if (board.isNotEmpty() && destination != "Settings") IconButton(onClick = { back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+            else if (board.isNotEmpty() && destination != Destination.SETTINGS) IconButton(onClick = { back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
         }, actions = {
             if (searchOpen) {
                 if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "Clear search") }
-            } else if (destination != "Settings") {
-            if (thread == 0L && (destination != "Watched" || board.isNotEmpty())) IconButton(onClick = { searchOpen = true }) { Icon(Icons.Default.Search, "Search") }
-            if (board.isEmpty() && destination == "Boards") {
+            } else if (destination != Destination.SETTINGS) {
+            if (thread == 0L && (destination != Destination.WATCHED || board.isNotEmpty())) IconButton(onClick = { searchOpen = true }) { Icon(Icons.Default.Search, "Search") }
+            if (board.isEmpty() && destination == Destination.BOARDS) {
                 IconToggleButton(checked = favoritesOnly, onCheckedChange = { favoritesOnly = it }) { Icon(if (favoritesOnly) Icons.Default.Star else Icons.Default.StarBorder, "Favorite boards") }
             }
             if (thread != 0L) {
@@ -484,7 +486,7 @@ fun parsePost(p: JSONObject, board: String): Post {
                 }) { Icon(if (key in watched) Icons.Default.Visibility else Icons.Default.VisibilityOff, "Watch thread") }
                 IconToggleButton(checked = imagesOnly, onCheckedChange = { imagesOnly = it }) { Icon(if (imagesOnly) Icons.Default.Article else Icons.Default.Collections, "Thread images") }
             }
-            if (board.isEmpty() && destination == "Watched") Box {
+            if (board.isEmpty() && destination == Destination.WATCHED) Box {
                 IconButton(onClick = { watchMenu = true }) { Icon(Icons.Default.MoreVert, "Watched options") }
                 DropdownMenu(expanded = watchMenu, onDismissRequest = { watchMenu = false }) {
                     DropdownMenuItem(text = { Text("Mark all as read") }, onClick = {
@@ -498,9 +500,9 @@ fun parsePost(p: JSONObject, board: String): Post {
                 }
             }
             if (board.isEmpty() && onlySaved) IconToggleButton(checked = showArchive, onCheckedChange = { showArchive = it }) { Icon(Icons.Default.Archive, "Archived saves") }
-            if (board.isNotEmpty() && thread == 0L && destination == "Boards") IconButton(onClick = { showNewThread = true }) { Icon(Icons.Default.Add, "New thread draft") }
+            if (board.isNotEmpty() && thread == 0L && destination == Destination.BOARDS) IconButton(onClick = { showNewThread = true }) { Icon(Icons.Default.Add, "New thread draft") }
             if (board.isNotEmpty() && thread == 0L) IconButton(onClick = { catalog = !catalog; prefs.edit().putBoolean("catalog", catalog).apply() }) { Icon(if (catalog) Icons.Default.ViewList else Icons.Default.GridView, "Switch catalog/list") }
-            if (destination != "Settings" && (destination != "Watched" || board.isNotEmpty())) Box {
+            if (destination != Destination.SETTINGS && (destination != Destination.WATCHED || board.isNotEmpty())) Box {
                 IconButton(onClick = { pageMenu = true }) { Icon(Icons.Default.MoreVert, "More actions") }
                 DropdownMenu(expanded = pageMenu, onDismissRequest = { pageMenu = false }) {
                     if (board.isNotEmpty() && thread == 0L) DropdownMenuItem(text = { Text("Sort threads") },
@@ -515,10 +517,10 @@ fun parsePost(p: JSONObject, board: String): Post {
                                 saved = saved + key; prefs.edit().putStringSet("bookmarks", saved).apply()
                                 val snapshot = posts.toList()
                                 saveStatus = saveStatus + (key to "Saving locally…")
-                                saveJobs[key] = scope.launch {
+                                saveJobs[key] = appScope.launch {
                                     try { store.save(key, snapshot) { status -> saveStatus = saveStatus + (key to status); prefs.edit().putString("save:$key", status).apply() } }
                                     catch (e: CancellationException) { throw e }
-                                    catch (_: Exception) { saveStatus = saveStatus + (key to "Local save failed · remove and save again") }
+                                    catch (_: Exception) { saveStatus = saveStatus + (key to "Local save failed · remove and save again"); prefs.edit().putString("save:$key", "Local save failed · remove and save again").apply() }
                                 }
                             }
                         })
@@ -548,7 +550,7 @@ fun parsePost(p: JSONObject, board: String): Post {
         val chromeInsets = PaddingValues(
             top = WindowInsets.statusBars.union(WindowInsets.displayCutout).asPaddingValues().calculateTopPadding() + 64.dp,
             bottom = if (wideLayout) 0.dp else WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 80.dp)
-        val scrollingReader = destination == "Boards" || (board.isNotEmpty() && destination != "Settings")
+        val scrollingReader = destination == Destination.BOARDS || (board.isNotEmpty() && destination != Destination.SETTINGS)
         val scrollbarInsets = if (scrollingReader) PaddingValues(
             top = maxOf(padding.calculateTopPadding(), WindowInsets.statusBars.union(WindowInsets.displayCutout).asPaddingValues().calculateTopPadding()),
             bottom = maxOf(padding.calculateBottomPadding(), WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())) else PaddingValues(0.dp)
@@ -557,65 +559,42 @@ fun parsePost(p: JSONObject, board: String): Post {
             LocalScrollbarInsets provides scrollbarInsets) {
         Row(Modifier.fillMaxSize().then(if (scrollingReader) Modifier else Modifier.padding(chromeInsets))) {
         if (wideLayout) NavigationRail {
-            listOf("Boards" to Icons.Default.Dashboard, "Watched" to Icons.Default.Visibility, "Saves" to Icons.Default.Bookmark, "Settings" to Icons.Default.Settings).forEach { (label, icon) ->
-                NavigationRailItem(selected = destination == label, onClick = { selectDestination(label) }, icon = { BadgedBox(badge = { if (label == "Watched" && watchedHasUnread) Badge() }) { Icon(icon, if (label == "Watched" && watchedHasUnread) "New replies" else null) } }, label = { Text(label) })
+            navDestinations.forEach { item ->
+                NavigationRailItem(selected = destination == item.label, onClick = { selectDestination(item.label) }, icon = { NavDestinationIcon(item, watchedHasUnread) }, label = { Text(item.label) })
             }
         }
         val refreshState = rememberPullToRefreshState()
         // Indicator starts just below the app bar in every view: reader content sits under the bars,
         // so offset by the bar's top inset; other views are already inset by chromeInsets.
         val readerActionTop = 8.dp + (if (scrollingReader) chromeInsets.calculateTopPadding() else 0.dp)
-        RefreshContainer(enabled = destination != "Settings", isRefreshing = loading, onRefresh = { refresh() },
+        RefreshContainer(enabled = destination != Destination.SETTINGS, isRefreshing = loading, onRefresh = { refresh() },
             state = refreshState, modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds(),
             indicator = {
                 PullToRefreshDefaults.Indicator(
-                    state = refreshState, isRefreshing = loading && destination != "Settings",
+                    state = refreshState, isRefreshing = loading && destination != Destination.SETTINGS,
                     modifier = Modifier.align(Alignment.TopCenter).offset(y = readerActionTop))
             }) {
         Column(Modifier.fillMaxSize().then(boardSwipe).graphicsLayer {
-            translationX = if (catalog && board.isNotEmpty() && thread == 0L && destination != "Settings") { if (boardSliding) boardSlide.value else boardDrag } else 0f
+            translationX = if (catalog && board.isNotEmpty() && thread == 0L && destination != Destination.SETTINGS) { if (boardSliding) boardSlide.value else boardDrag } else 0f
         }) {
-            if (destination == "Settings") {
-                LazyColumn(contentPadding = PaddingValues(vertical = 12.dp)) {
-                    item { SettingsToggle("4chan colors", "Off follows your phone’s theme and wallpaper colors",  boardColors) { boardColors = it; prefs.edit().putBoolean("boardColors", it).apply() } }
-                    if (boardColors) item {
-                        Box {
-                            ListItem(headlineContent = { Text("Theme") }, supportingContent = { Text(chanTheme.label) },
-                                trailingContent = { Icon(Icons.Default.ArrowDropDown, null) },
-                                modifier = Modifier.clickable { themeMenuOpen = true })
-                            DropdownMenu(expanded = themeMenuOpen, onDismissRequest = { themeMenuOpen = false }) {
-                                ChanTheme.entries.forEach { theme ->
-                                    DropdownMenuItem(text = { Text(theme.label) },
-                                        trailingIcon = { if (theme == chanTheme) Icon(Icons.Default.Check, null) },
-                                        onClick = {
-                                            chanThemeName = theme.name
-                                            prefs.edit().putString("chanTheme", theme.name).apply()
-                                            themeMenuOpen = false
-                                        })
-                                }
-                            }
-                        }
-                    }
-                    if (boardColors) item {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                            Text("4chan appearance", style = MaterialTheme.typography.titleSmall)
-                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                                listOf("System", "Light", "Dark").forEachIndexed { index, mode ->
-                                    SegmentedButton(selected = chanAppearance == mode, onClick = {
-                                        chanAppearance = mode; prefs.edit().putString("chanAppearance", mode).apply()
-                                    }, shape = SegmentedButtonDefaults.itemShape(index, 3)) { Text(mode) }
-                                }
-                            }
-                        }
-                    }
-                    item { WatchNotificationSetting() }
-                    if (!BuildConfig.SFW_ONLY) item { SettingsToggle("18+ boards", "Show adult boards in the directory", adult) { adult = it; prefs.edit().putBoolean("adult", it).apply() } }
-                    item { ListItem(headlineContent = { Text("Downloads") }, supportingContent = { Text("Progress, cancellation and retry") }, modifier = Modifier.clickable { showDownloads = true }) }
-                    item { ListItem(headlineContent = { Text("Donate") }, supportingContent = { Text("Ethereum") }, modifier = Modifier.clickable { showDonation = true }) }
-                    item { ListItem(headlineContent = { Text("Trfl ${BuildConfig.VERSION_NAME}") }, supportingContent = { Text(BuildConfig.COMMIT.take(12)) }) }
-                }
+            if (destination == Destination.SETTINGS) {
+                SettingsScreen(
+                    boardColors = boardColors, onBoardColorsChange = { boardColors = it; prefs.edit().putBoolean("boardColors", it).apply() },
+                    chanTheme = chanTheme, onChanThemeChange = { theme ->
+                        chanThemeName = theme.name
+                        prefs.edit().putString("chanTheme", theme.name).apply()
+                    },
+                    themeMenuOpen = themeMenuOpen, onThemeMenuOpenChange = { themeMenuOpen = it },
+                    chanAppearance = chanAppearance, onChanAppearanceChange = { mode -> chanAppearance = mode; prefs.edit().putString("chanAppearance", mode).apply() },
+                    adult = adult, onAdultChange = { adult = it; prefs.edit().putBoolean("adult", it).apply() },
+                    onOpenDownloads = { showDownloads = true }, onOpenDonation = { showDonation = true })
             } else {
             AnimatedVisibility(loading) { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+            // Reader content sits under the app bar, so push the banner below it there.
+            if (demo) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = if (scrollingReader) chromeInsets.calculateTopPadding() else 0.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Preview data", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                TextButton(onClick = { demo = false; refresh() }) { Text("Exit preview") }
+            }
             if (apiPath in ApiRequests.stalePaths) Text("Offline · cached copy", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.labelMedium)
             if (thread != 0L && (localCopy || key in dead || key in saveStatus)) Text(
                 listOfNotNull(if (key in dead) "Dead thread" else null, if (localCopy) "Offline saved copy" else null, saveStatus[key]).joinToString(" · "),
@@ -624,12 +603,12 @@ fun parsePost(p: JSONObject, board: String): Post {
                 Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { Text(message); Button(onClick = { refresh() }) { Text("Retry") }; TextButton(onClick = { demo = true }) { Text("Try offline preview") } }
             }
             if (board.isEmpty()) {
-                if (destination == "Boards") BoardDirectory(
-                    scrollTop = scrollTop, onScrollTopVisibility = { showScrollTop = it },
+                if (destination == Destination.BOARDS) BoardDirectory(
+                    scrollTop = scrollTop, onScrollTopVisibility = { showScrollTop = it }, onAtTop = { listAtTop = it },
                     positionKey = "boards:$favoritesOnly:$adult:$query", ready = !loading && boards.isNotEmpty(),
-                    boards = orderBoards(boards, boardOrder, favorites).filter { (it.safe || adult) && (!favoritesOnly || it.id in favorites) && (it.id.contains(query, true) || it.title.contains(query, true)) },
+                    boards = visibleBoards(boards, boardOrder, favorites, adult, favoritesOnly, query),
                     favorites = favorites, onOpen = {
-                        boardSequence = orderBoards(boards, boardOrder, favorites).filter { b -> (b.safe || adult) && (!favoritesOnly || b.id in favorites) && (b.id.contains(query, true) || b.title.contains(query, true)) }.map { b -> b.id }
+                        boardSequence = visibleBoards(boards, boardOrder, favorites, adult, favoritesOnly, query).map { b -> b.id }
                         board = it
                     },
                     onFavorite = { id -> favorites = if (id in favorites) favorites - id else favorites + id; prefs.edit().putStringSet("favorites", favorites).apply() },
@@ -644,13 +623,21 @@ fun parsePost(p: JSONObject, board: String): Post {
                         savedMedia = assets; savedMediaArchive = archive; savedMediaRemove = remove; savedMediaArchived = isArchived; media = selected
                     },
                     onArchive = { entry -> archived = if (entry in archived) archived - entry else archived + entry; prefs.edit().putStringSet("archived", archived).apply() },
-                    onRemove = { pendingRemoval = it }
-                ) else FastScrollList(state = persistentListState("tab:$destination", !loading), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (destination == "Watched") {
+                    onRemove = { pendingRemoval = it }, scrollTop = scrollTop
+                ) else {
+                    val tabState = persistentListState("tab:$destination", !loading)
+                    LaunchedEffect(tabState) { snapshotFlow { scrollTop }.drop(1).collect { tabState.animateScrollToItem(0) } }
+                    FastScrollList(state = tabState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (destination == Destination.WATCHED) {
                         if (watched.isEmpty()) item { Text("Watch a thread using its eye icon. Open this tab or refresh to check replies.") }
-                        items(watched.sorted()) { entry ->
+                        items(watched.sortedWith(compareByDescending<String> { (watchUnread[it] ?: 0) > 0 }.thenBy { it }), key = { it }) { entry ->
                             var menu by remember { mutableStateOf(false) }
-                            ListItem(leadingContent = { if ((watchUnread[entry] ?: 0) > 0) Badge(modifier = Modifier.semantics { contentDescription = "New replies" }) }, headlineContent = { Text("/$entry" + if (entry in dead) " · Dead" else "") }, supportingContent = { Text(watchStatus[entry] ?: "Checking…") },
+                            val title = threadTitles[entry]
+                            val status = watchStatus[entry] ?: "Checking…"
+                            val deadLabel = if (entry in dead && status != "Dead thread") " · Dead" else ""
+                            ListItem(leadingContent = { if ((watchUnread[entry] ?: 0) > 0) Badge(modifier = Modifier.semantics { contentDescription = "New replies" }) },
+                                headlineContent = { Text(title ?: ("/$entry" + if (entry in dead) " · Dead" else ""), maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                                supportingContent = { Text(if (title != null) "/$entry$deadLabel · $status" else status) },
                                 trailingContent = { Box {
                                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Options /$entry") }
                                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -661,6 +648,7 @@ fun parsePost(p: JSONObject, board: String): Post {
                                 modifier = Modifier.animateItem().clickable { board = entry.substringBefore('/'); thread = entry.substringAfter('/').toLong() })
                         }
                     }
+                    }
                 }
             } else {
                 val filtered = remember(posts, query, thread, threadSort) {
@@ -670,6 +658,11 @@ fun parsePost(p: JSONObject, board: String): Post {
                 if (!loading && error == null && filtered.isEmpty()) Text("No matching posts", Modifier.padding(24.dp))
                 val gridState = persistentGridState("grid:$key:$imagesOnly:$threadSort:$query", !loading && filtered.isNotEmpty())
                 LaunchedEffect(gridState) { snapshotFlow { scrollTop }.drop(1).collect { gridState.animateScrollToItem(0) } }
+                LaunchedEffect(gridState, catalog, thread) {
+                    if (catalog && thread == 0L) snapshotFlow {
+                        gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
+                    }.collect { listAtTop = it }
+                }
                 LaunchedEffect(gridState, imagesOnly, catalog, thread) {
                     if ((imagesOnly && thread != 0L) || (catalog && thread == 0L)) snapshotFlow {
                         gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 200
@@ -682,7 +675,7 @@ fun parsePost(p: JSONObject, board: String): Post {
                         items(attachments, key = { it.id }) { p ->
                             Box(Modifier.aspectRatio(1f).clickable { media = p }) {
                                 AsyncImage(p.thumb, "Open attachment ${p.id}", Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
-                                if (p.image?.endsWith(".webm") == true) Icon(Icons.Default.PlayArrow, "Video", Modifier.align(Alignment.Center), tint = Color.White)
+                                if (p.isVideo) Icon(Icons.Default.PlayArrow, "Video", Modifier.align(Alignment.Center), tint = Color.White)
                             }
                         }
                     }
@@ -693,7 +686,11 @@ fun parsePost(p: JSONObject, board: String): Post {
                             else Icon(Icons.Default.Image, "No attachment", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Column(Modifier.fillMaxWidth().weight(1f).padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(p.title.ifBlank { "No. ${p.id}" }, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(p.title.ifBlank { "No. ${p.id}" }, Modifier.weight(1f), minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                                // Centre the 16dp flags on the title's first line.
+                                if (p.sticky || p.closed) Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) { PostFlags(p) }
+                            }
                             Text(p.body, modifier = Modifier.weight(1f), maxLines = 4, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
                             ThreadMetrics(p)
                         }
@@ -701,6 +698,11 @@ fun parsePost(p: JSONObject, board: String): Post {
                 } else key(board, thread) {
                     val state = persistentListState("list:$key:$threadSort:$query", !loading && filtered.isNotEmpty())
                     LaunchedEffect(state) { snapshotFlow { scrollTop }.drop(1).collect { state.animateScrollToItem(0) } }
+                    LaunchedEffect(state) {
+                        if (thread == 0L) snapshotFlow {
+                            state.firstVisibleItemIndex == 0 && state.firstVisibleItemScrollOffset == 0
+                        }.collect { listAtTop = it }
+                    }
                     LaunchedEffect(state) {
                         snapshotFlow { state.firstVisibleItemIndex > 0 || state.firstVisibleItemScrollOffset > 200 }.collect { showScrollTop = it }
                     }
@@ -784,150 +786,16 @@ fun parsePost(p: JSONObject, board: String): Post {
                 saved = saved - entry; archived = archived - entry
                 prefs.edit().putStringSet("bookmarks", saved).putStringSet("archived", archived).remove("save:$entry").apply()
                 saveStatus = saveStatus - entry
-                scope.launch { saveJobs.remove(entry)?.cancelAndJoin(); store.remove(entry) }
+                appScope.launch { saveJobs.remove(entry)?.cancelAndJoin(); store.remove(entry) }
                 pendingRemoval = null
             }) { Text("Remove") } }, dismissButton = { TextButton(onClick = { pendingRemoval = null }) { Text("Cancel") } })
     }
     media?.let { selected ->
         val attachments = savedMedia ?: posts.filter { it.image != null }
-        if (attachments.isNotEmpty()) Dialog(onDismissRequest = { media = null }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-            ImmersiveViewerWindow()
-            val pager = rememberPagerState(initialPage = attachments.indexOfFirst { it.id == selected.id }.coerceAtLeast(0), pageCount = { attachments.size })
-            val scope = rememberCoroutineScope()
-            val carousel = rememberLazyListState()
-            LaunchedEffect(pager.currentPage) { carousel.animateScrollToItem((pager.currentPage - 2).coerceAtLeast(0)) }
-            Box(Modifier.fillMaxSize().background(Color.Black)) {
-                HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { index ->
-                    val post = attachments[index]
-                    var scale by remember(post.id) { mutableFloatStateOf(1f) }
-                    var offset by remember(post.id) { mutableStateOf(Offset.Zero) }
-                    var throwDistance by remember(post.id) { mutableFloatStateOf(0f) }
-                    val throwAnimation = remember(post.id) { Animatable(0f) }
-                    var throwing by remember(post.id) { mutableStateOf(false) }
-                    val viewerHeight = with(LocalDensity.current) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
-                    val throwGesture = Modifier.pointerInput(post.id, scale) {
-                        if (scale <= 1.01f) {
-                            val velocity = VelocityTracker()
-                            detectVerticalDragGestures(onDragStart = { velocity.resetTracking(); throwDistance = 0f },
-                                onDragCancel = { scope.launch { throwing = true; throwAnimation.snapTo(throwDistance); throwDistance = 0f; throwAnimation.animateTo(0f, spring()); throwing = false } },
-                                onDragEnd = {
-                                    val speed = velocity.calculateVelocity().y
-                                    val dismiss = kotlin.math.abs(throwDistance) > viewerHeight * 0.18f || (kotlin.math.abs(speed) > 1400f && kotlin.math.abs(throwDistance) > 30f)
-                                    scope.launch {
-                                        throwing = true; throwAnimation.snapTo(throwDistance); throwDistance = 0f
-                                        if (dismiss) {
-                                            throwAnimation.animateTo(if (throwAnimation.value < 0) -viewerHeight else viewerHeight, tween(180))
-                                            media = null
-                                        } else throwAnimation.animateTo(0f, spring(stiffness = 450f))
-                                        throwing = false
-                                    }
-                                }, onVerticalDrag = { change, amount ->
-                                    if (!throwing) { change.consume(); throwDistance += amount; velocity.addPosition(change.uptimeMillis, change.position) }
-                                })
-                        }
-                    }
-                    val transform = rememberTransformableState { zoom, pan, _ ->
-                        scale = (scale * zoom).coerceIn(1f, 6f)
-                        offset = if (scale <= 1f) Offset.Zero else offset + pan
-                    }
-                    var mediaLoading by remember(post.image) { mutableStateOf(true) }
-                    var mediaFailed by remember(post.image) { mutableStateOf(false) }
-                    Box(Modifier.fillMaxSize().then(throwGesture).graphicsLayer {
-                        translationY = if (throwing) throwAnimation.value else throwDistance
-                        alpha = (1f - kotlin.math.abs(translationY) / viewerHeight).coerceIn(0.15f, 1f)
-                    }) {
-                        if (post.isVideo) {
-                            if (pager.currentPage == index) AndroidVideo(post.image!!,
-                                onLoadingChanged = { mediaLoading = it }, onError = { mediaLoading = false; mediaFailed = true })
-                        } else AsyncImage(post.image, "Full-size attachment; pinch to zoom",
-                            Modifier.fillMaxSize().transformable(state = transform, canPan = { scale > 1f }).graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
-                            contentScale = ContentScale.Fit, onLoading = { mediaLoading = true; mediaFailed = false },
-                            onSuccess = { mediaLoading = false; mediaFailed = false }, onError = { mediaLoading = false; mediaFailed = true })
-                        if (mediaLoading) LinearProgressIndicator(Modifier.align(Alignment.TopCenter).displayCutoutPadding().padding(top = 64.dp).fillMaxWidth())
-                        if (mediaFailed) Text("Unable to load attachment", color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp))
-                    }
-                }
-                TopAppBar(modifier = Modifier.align(Alignment.TopCenter),
-                    title = { Text("${pager.currentPage + 1} / ${attachments.size}") },
-                    navigationIcon = { IconButton(onClick = { media = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close media") } },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xD9171923), titleContentColor = Color.White, navigationIconContentColor = Color.White, actionIconContentColor = Color.White),
-                    windowInsets = WindowInsets.displayCutout.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal), actions = {
-                    if (savedMedia != null) {
-                        IconButton(onClick = { savedMediaArchive?.invoke(attachments[pager.currentPage]); media = null }) {
-                            Icon(if (savedMediaArchived) Icons.Default.Unarchive else Icons.Default.Archive, if (savedMediaArchived) "Unarchive media" else "Archive media")
-                        }
-                        IconButton(onClick = { savedMediaRemove?.invoke(attachments[pager.currentPage]); media = null }) { Icon(Icons.Default.DeleteOutline, "Remove media from Saves") }
-                    } else IconButton(enabled = !savingMedia, onClick = {
-                        val selected = attachments[pager.currentPage]
-                        savingMedia = true
-                        scope.launch {
-                            try {
-                                mediaSaves.save(selected)
-                                android.widget.Toast.makeText(context, "Saved in Trfl → Saves", android.widget.Toast.LENGTH_SHORT).show()
-                            } catch (e: CancellationException) { throw e }
-                            catch (_: Exception) { android.widget.Toast.makeText(context, "Could not save media", android.widget.Toast.LENGTH_SHORT).show() }
-                            finally { savingMedia = false }
-                        }
-                    }) { Icon(Icons.Default.BookmarkBorder, "Save media in Trfl") }
-                    IconButton(onClick = {
-                        val image = attachments[pager.currentPage].image
-                        if (image?.startsWith("https://i.4cdn.org/") == true) {
-                            if (android.os.Build.VERSION.SDK_INT <= 28 && context.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                                (context as? android.app.Activity)?.requestPermissions(arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE), 701)
-                                android.widget.Toast.makeText(context, "Allow storage access, then tap Download again", android.widget.Toast.LENGTH_SHORT).show()
-                                return@IconButton
-                            }
-                            runCatching { downloads.start(image) }.onSuccess { android.widget.Toast.makeText(context, "Download started · see Settings → Downloads", android.widget.Toast.LENGTH_SHORT).show() }
-                                .onFailure { android.widget.Toast.makeText(context, "Download could not start", android.widget.Toast.LENGTH_SHORT).show() }
-                        } else {
-                            val selected = attachments[pager.currentPage]
-                            scope.launch {
-                                try { mediaSaves.exportLocal(selected); android.widget.Toast.makeText(context, "Exported to Downloads", android.widget.Toast.LENGTH_SHORT).show() }
-                                catch (e: CancellationException) { throw e }
-                                catch (_: Exception) { android.widget.Toast.makeText(context, "Could not export media", android.widget.Toast.LENGTH_SHORT).show() }
-                            }
-                        }
-                    }) { Icon(Icons.Default.Download, "Export media to Downloads", tint = Color.White) }
-                })
-                BottomAppBar(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(96.dp),
-                    containerColor = Color(0xEB171923), contentColor = Color.White,
-                    contentPadding = PaddingValues(top = 4.dp, bottom = 20.dp),
-                    windowInsets = WindowInsets.navigationBars.union(WindowInsets.displayCutout.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))) {
-                LazyRow(state = carousel, modifier = Modifier.align(Alignment.Top).fillMaxWidth().height(64.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(attachments.size, key = { attachments[it].id }) { index ->
-                        val attachment = attachments[index]
-                        Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp))
-                            .border(if (pager.currentPage == index) 2.dp else 0.dp, if (pager.currentPage == index) Color.White else Color.Transparent, RoundedCornerShape(10.dp))
-                            .clickable { scope.launch { pager.animateScrollToPage(index) } }, contentAlignment = Alignment.Center) {
-                            AsyncImage(attachment.thumb ?: attachment.image.takeUnless { attachment.isVideo }, "Attachment ${index + 1}", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                            if (attachment.isVideo) Icon(Icons.Default.PlayArrow, "Video", tint = Color.White)
-                        }
-                    }
-                }
-                }
-            }
-        }
+        if (attachments.isNotEmpty()) MediaViewer(selected, attachments, onDismiss = { media = null },
+            fromSaves = savedMedia != null, savedMediaArchived = savedMediaArchived,
+            onArchiveSaved = savedMediaArchive, onRemoveSaved = savedMediaRemove,
+            savingMedia = savingMedia, onSavingMediaChange = { savingMedia = it },
+            mediaSaves = mediaSaves, downloads = downloads)
     }
-}
-@Composable private fun AndroidVideo(url: String, onLoadingChanged: (Boolean) -> Unit, onError: () -> Unit) {
-    val loadingCallback by rememberUpdatedState(onLoadingChanged)
-    val errorCallback by rememberUpdatedState(onError)
-    androidx.compose.ui.viewinterop.AndroidView(factory = { ctx -> android.widget.VideoView(ctx).apply {
-        loadingCallback(true)
-        setOnPreparedListener { it.isLooping = true; loadingCallback(false); start() }
-        setOnInfoListener { _, what, _ ->
-            when (what) {
-                android.media.MediaPlayer.MEDIA_INFO_BUFFERING_START -> loadingCallback(true)
-                android.media.MediaPlayer.MEDIA_INFO_BUFFERING_END,
-                android.media.MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START -> loadingCallback(false)
-            }
-            false
-        }
-        setOnErrorListener { _, _, _ -> errorCallback(); true }
-        setMediaController(android.widget.MediaController(ctx).also { it.setAnchorView(this) })
-        setVideoURI(android.net.Uri.parse(url))
-    } }, modifier = Modifier.fillMaxSize(), onRelease = {
-        it.setOnPreparedListener(null); it.setOnInfoListener(null); it.setOnErrorListener(null); it.stopPlayback()
-    })
 }

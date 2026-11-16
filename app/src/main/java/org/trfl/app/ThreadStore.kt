@@ -23,7 +23,7 @@ class ThreadStore(context: Context) {
         require(BoardPolicy.allows(key.substringBefore('/'))) { "Board unavailable in this build" }
         val dir = directory(key).apply { mkdirs() }
         val array = JSONArray()
-        posts.forEach { p -> array.put(JSONObject().put("id", p.id).put("title", p.title).put("body", p.body).put("image", p.image).put("thumb", p.thumb).put("replies", p.replies).put("images", p.images).put("created", p.created).put("lastReply", p.lastReply)) }
+        posts.forEach { p -> array.put(postToJson(p)) }
         val temp = File(dir, "thread.tmp")
         temp.writeText(array.toString())
         check(temp.renameTo(File(dir, "thread.json"))) { "Could not save thread" }
@@ -77,10 +77,24 @@ class ThreadStore(context: Context) {
                 val url = p.optString(field).takeIf { it.isNotEmpty() && it != "null" } ?: return null
                 return mediaFile(dir, url).takeIf { it.isFile }?.toURI()?.toString() ?: url
             }
-            (0 until array.length()).map { i -> val p = array.getJSONObject(i); Post(p.getLong("id"), p.optString("title"), p.optString("body"), media(p, "image"), media(p, "thumb"), p.optInt("replies"), p.optInt("images"), p.optLong("created"), p.optLong("lastReply")) }
+            (0 until array.length()).map { i -> val p = array.getJSONObject(i); postFromJson(p, media(p, "image"), media(p, "thumb")) }
         } catch (_: Exception) { null }
     }
     suspend fun remove(key: String) = withContext(Dispatchers.IO) { directory(key).deleteRecursively() }
 }
+
+/** Snapshot encoding of a post; [postFromJson] accepts older snapshots that lack the newer fields. */
+internal fun postToJson(p: Post): JSONObject = JSONObject().put("id", p.id).put("title", p.title).put("body", p.body)
+    .put("image", p.image).put("thumb", p.thumb).put("replies", p.replies).put("images", p.images)
+    .put("created", p.created).put("lastReply", p.lastReply).put("video", p.video)
+    .put("name", p.name).put("trip", p.trip).put("posterId", p.posterId).put("capcode", p.capcode)
+    .put("filename", p.filename).put("sticky", p.sticky).put("closed", p.closed)
+
+internal fun postFromJson(p: JSONObject, image: String?, thumb: String?): Post =
+    Post(p.getLong("id"), p.optString("title"), p.optString("body"), image, thumb, p.optInt("replies"), p.optInt("images"),
+        p.optLong("created"), p.optLong("lastReply"), video = p.optBoolean("video"),
+        name = p.optString("name"), trip = p.optString("trip"), posterId = p.optString("posterId"),
+        capcode = p.optString("capcode"), filename = p.optString("filename"),
+        sticky = p.optBoolean("sticky"), closed = p.optBoolean("closed"))
 
 class ApiException(val status: Int) : Exception(if (status == 404) "Thread no longer exists" else "Server returned $status. Try again shortly.")

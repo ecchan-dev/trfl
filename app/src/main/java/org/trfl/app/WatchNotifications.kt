@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
 
 class TrflApplication : Application() {
     private val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == "watchNotifications" || key == "watched") WatchNotifications.schedule(this)
+        if (key == "watchNotifications" || key == "watched" || key == "dead") WatchNotifications.schedule(this)
         if (key == "watchNotifications" || key == "watched" || key?.startsWith("seen:") == true || key?.startsWith("total:") == true) {
             WatchNotifications.update(this)
         }
@@ -36,7 +36,9 @@ object WatchNotifications {
     fun schedule(context: Context) {
         val prefs = context.getSharedPreferences("trfl", 0)
         val manager = WorkManager.getInstance(context)
-        if (!shouldCheckWatchedThreads(prefs.getStringSet("watched", emptySet()).orEmpty())) {
+        val watched = prefs.getStringSet("watched", emptySet()).orEmpty()
+        val dead = prefs.getStringSet("dead", emptySet()).orEmpty()
+        if (!shouldCheckWatchedThreads(watched, dead)) {
             manager.cancelUniqueWork("watch-replies")
             return
         }
@@ -93,12 +95,24 @@ class WatchRepliesWorker(context: Context, params: WorkerParameters) : Coroutine
                     if (!prefs.contains("seen:$entry")) editor.putInt("seen:$entry", count)
                     editor.apply()
                 }
+                if (posts.length() > 0 && posts.getJSONObject(0).optInt("archived") == 1) markDead(prefs, entry)
             } catch (e: CancellationException) { throw e }
+            catch (e: ApiException) {
+                // A deleted thread will never come back; stop polling it every 15 minutes.
+                if (e.status == 404) markDead(prefs, entry)
+            }
             catch (_: Exception) { /* Keep the last known state on network failures. */ }
             delay(1100)
         }
         WatchNotifications.update(applicationContext)
         return Result.success()
+    }
+
+    /** Re-reads the current set right before writing and always stores a new set object. */
+    private fun markDead(prefs: SharedPreferences, entry: String) {
+        val current = prefs.getStringSet("dead", emptySet()).orEmpty()
+        if (entry in current) return
+        prefs.edit().putStringSet("dead", current.toSet() + entry).apply()
     }
 }
 
@@ -111,7 +125,7 @@ fun WatchNotificationSetting() {
         enabled = granted
         prefs.edit().putBoolean("watchNotifications", granted).apply()
     }
-    SettingsToggle("Background reply notifications", "Watched threads are checked about every 15 minutes; notifications and launcher dots are optional", enabled) { value ->
+    SettingsToggle("Background reply notifications", "Watched threads are checked in the background about every 15 minutes either way; this only controls whether a notification is shown", enabled) { value ->
         if (value && Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             permission.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {

@@ -45,11 +45,13 @@ The `Build APK` GitHub Actions workflow tests, lints and builds a debug APK on p
 
 After a successful run, open its summary and download **trfl-apk-…** under **Artifacts**, then extract the ZIP to get `app-debug.apk`. Artifacts are kept for 14 days. No signing secrets are required. These are development builds signed with the runner's temporary debug key, not the existing phone/release key: they cannot update that installation, and signing keys may differ between runs. Do not uninstall your existing app without backing up its data.
 
-## Play-only build (not publication-ready)
+## Play-only build (not currently defined)
 
-`./gradlew :app:bundlePlay :app:lintPlay :app:testPlayUnitTest` creates an **unsigned** optimized Play bundle under `app/build/outputs/bundle/play/`. Secure upload signing and Play Console setup remain required. Its application ID is `org.trfl.app.play`, separate from sideloaded `org.trfl.app`, so adult preferences, caches and saved media are not inherited. The existing phone deployment still uses the unrestricted release variant.
+The build does **not** currently define a Play variant: `app/build.gradle.kts` has no `play` build type or product flavors, and `defaultConfig` hard-codes `BuildConfig.SFW_ONLY = false`. Tasks such as `bundlePlay`, `lintPlay` and `testPlayUnitTest` do not exist, and every build is the unrestricted app (`org.trfl.app`). A `play` build type existed briefly before v1.0.0 and was removed in the v1.0.0 release commit.
 
-The Play variant has no adult-board setting. A fail-closed allowlist based on the official `ws_board` classification restricts directory entries, deep links, API/cache access, watched/saved entries and offline thread loading. New boards require an explicit allowlist review; directory entries must also retain their safe flag. This removes adult boards, **not all potentially objectionable posts on safe boards**. UGC moderation/reporting/blocking, privacy disclosures, age rating and other Play requirements still need review; this build does not imply Play approval.
+Code support for a safe-board-only build remains. `BoardPolicy` holds a fail-closed allowlist based on the official `ws_board` classification. When `BuildConfig.SFW_ONLY` is true, it restricts directory entries, deep links, API/cache access, watched/saved entries, offline thread loading and posting/CAPTCHA targets, and Settings hides the adult-board toggle. `BoardPolicyTest` covers the allowlist. New boards require an explicit allowlist review; directory entries must also retain their safe flag. This removes adult boards, **not all potentially objectionable posts on safe boards**.
+
+Restoring the variant would require adding a `play` build type (or flavor) that inherits the release configuration, sets `applicationIdSuffix = ".play"` (separate data from `org.trfl.app`), overrides `buildConfigField("boolean", "SFW_ONLY", "true")` and supplies secure upload signing. UGC moderation/reporting/blocking, privacy disclosures, age rating and other Play requirements would still need review.
 
 ## Scope and known limitations
 

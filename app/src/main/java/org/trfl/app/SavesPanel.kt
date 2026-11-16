@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.drop
 
 private data class SavedAsset(val key: String, val post: Post, val label: String, val search: String)
 
@@ -32,8 +33,9 @@ private data class SavedAsset(val key: String, val post: Post, val label: String
 fun SavesPanel(keys: Set<String>, archived: Set<String>, showArchive: Boolean, query: String,
                revision: Any, store: ThreadStore, downloads: MediaDownloads, dead: Set<String>,
                status: (String) -> String, onOpenThread: (String) -> Unit,
-               onOpenMedia: (List<Post>, Post, (Post) -> Unit, (Post) -> Unit, Boolean) -> Unit, onArchive: (String) -> Unit, onRemove: (String) -> Unit) {
+               onOpenMedia: (List<Post>, Post, (Post) -> Unit, (Post) -> Unit, Boolean) -> Unit, onArchive: (String) -> Unit, onRemove: (String) -> Unit, scrollTop: Int = 0) {
     val context = LocalContext.current
+    val scrollTopRequest by rememberUpdatedState(scrollTop)
     val prefs = remember { context.getSharedPreferences("trfl", 0) }
     val pager = rememberPagerState(initialPage = prefs.getInt("savesTab", 0).coerceIn(0, 2), pageCount = { 3 })
     val scope = rememberCoroutineScope()
@@ -80,7 +82,9 @@ fun SavesPanel(keys: Set<String>, archived: Set<String>, showArchive: Boolean, q
         HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.Top) { tab ->
         if (tab == 0) {
             val matches = threadKeys.filter { key -> "$key ${snapshots[key]?.firstOrNull()?.title.orEmpty()} ${snapshots[key].orEmpty().joinToString(" ") { it.body }}".contains(query, true) }
-            FastScrollList(state = persistentListState("saves:threads:$showArchive:$query", !loading), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val threadList = persistentListState("saves:threads:$showArchive:$query", !loading)
+            LaunchedEffect(threadList) { snapshotFlow { scrollTopRequest }.drop(1).collect { threadList.animateScrollToItem(0) } }
+            FastScrollList(state = threadList, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (matches.isEmpty() && !loading) item { Text(if (showArchive) "No matching archived threads" else "No matching saved threads") }
                 items(matches, key = { it }) { key ->
                     var menu by remember { mutableStateOf(false) }
@@ -100,6 +104,7 @@ fun SavesPanel(keys: Set<String>, archived: Set<String>, showArchive: Boolean, q
             fun isArchived(asset: SavedAsset) = asset.key in archivedMedia || archived.any { asset.key.startsWith("$it/") }
             val matches = assets.filter { it.key !in removedMedia && isArchived(it) == showArchive && it.post.isVideo == (tab == 2) && it.search.contains(query, true) }
             val grid = persistentGridState("saves:media:$tab:$showArchive:$query", !loading && matches.isNotEmpty())
+            LaunchedEffect(grid) { snapshotFlow { scrollTopRequest }.drop(1).collect { grid.animateScrollToItem(0) } }
             if (matches.isEmpty() && !loading) Text("No matching saved ${if (tab == 2) "videos" else "photos"}", Modifier.padding(24.dp))
             FastScrollGrid(state = grid, columns = GridCells.Adaptive(140.dp), contentPadding = PaddingValues(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

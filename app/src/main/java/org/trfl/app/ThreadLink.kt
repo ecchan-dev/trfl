@@ -8,5 +8,5 @@ fun parseThreadLink(value: String?): PageRoute? = runCatching {
     val match = Regex("^/([a-z0-9]+)/thread/([0-9]+)(?:/.*)?$").matchEntire(uri.path) ?: return null
     if (!BoardPolicy.allows(match.groupValues[1])) return null
     val id = match.groupValues[2].toLongOrNull()?.takeIf { it > 0 } ?: return null
-    PageRoute("Boards", match.groupValues[1], id)
+    PageRoute(Destination.BOARDS, match.groupValues[1], id)
 }.getOrNull()

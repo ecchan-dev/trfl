@@ -35,6 +35,10 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 /**
  * Bottom reply bar for thread view. Posting is not wired yet, so [canSend] is false
  * and the send button stays inactive.
+ *
+ * [focusRequest] changes after first composition focus the field. Set [autoFocus] when the
+ * bar is first composed in response to a user action (e.g. expanding a collapsed composer),
+ * since a request made in the same frame it appears would otherwise be treated as initial.
  */
 @Composable
 fun ThreadReplyBar(
@@ -45,12 +49,13 @@ fun ThreadReplyBar(
     canSend: Boolean = false,
     focusRequest: Int = 0,
     enabled: Boolean = true,
+    autoFocus: Boolean = false,
 ) {
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val initialFocusRequest = remember { focusRequest }
     LaunchedEffect(focusRequest) {
-        if (focusRequest != initialFocusRequest) {
+        if (focusRequest != initialFocusRequest || autoFocus) {
             focus.requestFocus()
             keyboard?.show()
         }

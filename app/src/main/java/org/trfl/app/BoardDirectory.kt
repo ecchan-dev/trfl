@@ -30,10 +30,16 @@ import kotlinx.coroutines.flow.drop
 fun BoardDirectory(boards: List<Board>, favorites: Set<String>, onOpen: (String) -> Unit,
                    onFavorite: (String) -> Unit, onMove: (String, String) -> Unit,
                    positionKey: String = "boards", ready: Boolean = true,
-                   scrollTop: Int = 0, onScrollTopVisibility: (Boolean) -> Unit = {}) {
+                   scrollTop: Int = 0, onScrollTopVisibility: (Boolean) -> Unit = {},
+                   onAtTop: (Boolean) -> Unit = {}) {
     val state = persistentListState(positionKey, ready)
     val reportScrollTopVisibility by rememberUpdatedState(onScrollTopVisibility)
     val scrollTopRequest by rememberUpdatedState(scrollTop)
+    val reportAtTop by rememberUpdatedState(onAtTop)
+    LaunchedEffect(state) {
+        snapshotFlow { state.firstVisibleItemIndex == 0 && state.firstVisibleItemScrollOffset == 0 }
+            .collect { reportAtTop(it) }
+    }
     LaunchedEffect(state) {
         snapshotFlow { state.firstVisibleItemIndex > 0 || state.firstVisibleItemScrollOffset > 200 }
             .collect { reportScrollTopVisibility(it) }
