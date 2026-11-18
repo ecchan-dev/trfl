@@ -7,7 +7,7 @@ android {
     namespace = "org.trfl.app"
     compileSdk = 35
     defaultConfig {
-        applicationId = "org.trfl.app"; minSdk = 26; targetSdk = 35; versionCode = 104; versionName = "1.0.3"
+        applicationId = "org.trfl.app"; minSdk = 26; targetSdk = 35; versionCode = 105; versionName = "1.0.4"
         buildConfigField("boolean", "SFW_ONLY", "false")
         buildConfigField("String", "COMMIT", "\"${providers.gradleProperty("trflCommit").getOrElse("development")}\"")
     }
