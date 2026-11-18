@@ -5,67 +5,49 @@ import org.junit.Test
 
 // Synthetic, offline fixtures: no challenge endpoint or network access.
 class CaptchaWebPolicyTest {
-    @Test fun syntheticOfficialResourcesAndBlockedNavigation() {
-        assertTrue(captchaResourceAllowed("https://sys.4chan.org/captcha?ext=1&board=g&thread_id=123&ticket=synthetic"))
-        assertTrue(captchaResourceAllowed("https://s.4cdn.org/js/tcaptcha.min.7.js"))
-        assertTrue(captchaResourceAllowed("https://s.4cdn.org/image/temp/april2026/root/a.png"))
-        listOf("http://sys.4chan.org/captcha", "https://sys.4chan.org.evil.test/captcha", "https://sys.4chan.org/other", "https://user@sys.4chan.org/captcha", "file:///captcha", "https://s.4cdn.org/other", "https://s.4cdn.org/image/temp/april2026/../other", "https://s.4cdn.org/image/temp/april2026/%2e%2e/other", "https://js.hcaptcha.com/1/api.js?render=explicit").forEach {
-            assertFalse(it, captchaResourceAllowed(it))
-        }
-    }
-
-    @Test fun syntheticRequestRoutingKeepsBootstrapLocal() {
+    @Test fun syntheticRoutingKeepsTopLevelPageLocal() {
         assertEquals(CaptchaRequestRoute.HOST, captchaRequestRoute(CAPTCHA_HOST_URL, "GET", true))
         assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute(CAPTCHA_HOST_URL, "GET", false))
         assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute(CAPTCHA_HOST_URL, "POST", true))
-        listOf("$CAPTCHA_HOST_URL?x=1", "$CAPTCHA_HOST_URL/", "data:text/html,hello", "https://boards.4chan.org/").forEach {
+        listOf("$CAPTCHA_HOST_URL?x=1", "data:text/html,hello", "https://boards.4chan.org/", "https://sys.4chan.org/captcha?board=g").forEach {
             assertEquals(it, CaptchaRequestRoute.BLOCK, captchaRequestRoute(it, "GET", true))
         }
-        assertEquals(CaptchaRequestRoute.INERT, captchaRequestRoute("about:blank", "GET", false))
-        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute("about:blank", "GET", true))
-        assertEquals(CaptchaRequestRoute.INERT, captchaRequestRoute("data:image/png;base64,aGVsbG8=", "GET", false))
-        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute("data:text/html;base64,PHNjcmlwdD4=", "GET", false))
-        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute("https://boards.4chan.org/favicon.ico", "GET", false))
-        val remote = "https://sys.4chan.org/captcha?board=g"
-        assertEquals(CaptchaRequestRoute.REMOTE, captchaRequestRoute(remote, "GET", false))
-        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute(remote, "GET", true))
-        assertEquals(CaptchaRequestRoute.BLOCK, captchaRequestRoute(remote, "POST", false))
     }
 
-    @Test fun syntheticDiagnosticsNeverExposeRequestData() {
-        val challenge = "https://sys.4chan.org/captcha?ticket=secret"
-        assertEquals(CaptchaEndpoint.CHALLENGE, captchaEndpoint(challenge))
-        assertEquals(CaptchaEndpoint.WIDGET_SCRIPT, captchaEndpoint("https://s.4cdn.org/js/tcaptcha.min.7.js"))
-        assertEquals(CaptchaEndpoint.IMAGE, captchaEndpoint("https://s.4cdn.org/image/temp/april2026/root/file"))
-        assertEquals(CaptchaEndpoint.OTHER, captchaEndpoint("https://sys.4chan.org/secret?token=secret"))
-        assertEquals("sys.4chan.org · HTTPS · GET · subresource", captchaBlockedDiagnostic("https://sys.4chan.org/secret?token=secret", "GET", false))
-        assertNull(captchaBlockedDiagnostic("https://user:password@sys.4chan.org/secret?token=secret", "GET", false))
-        assertNull(captchaBlockedDiagnostic("https://boards.4chan.org/favicon.ico", "GET", false))
-        assertNull(captchaBlockedDiagnostic("http://127.0.0.1/secret", "GET", false))
-        assertTrue(captchaCriticalBlocked("https://sys.4chan.org/captcha?ticket=secret"))
-        assertEquals(CaptchaBlockedImpact.OPTIONAL, captchaBlockedImpact("https://sys.4chan.org/favicon.ico"))
-        assertEquals(CaptchaBlockedImpact.OPTIONAL, captchaBlockedImpact("https://unknown.example.org/tracker"))
-        assertEquals(CaptchaBlockedImpact.FATAL, captchaBlockedImpact("https://sys.4chan.org/captcha"))
-        assertEquals("Remote HTTP 403 (challenge)", captchaRemoteHttpDiagnostic(challenge, 403))
-        assertEquals("Network error (challenge)", captchaNetworkDiagnostic(challenge))
+    @Test fun syntheticRoutingLetsWidgetDependenciesLoad() {
+        listOf("https://sys.4chan.org/captcha?board=g", CAPTCHA_WIDGET_SCRIPT, "https://js.hcaptcha.com/1/api.js?render=explicit",
+            "https://mcl.spur.us/d/mcl.js", "https://challenges.cloudflare.com/turnstile/v0/api.js", "about:blank", "data:image/png;base64,aGVsbG8=").forEach {
+            assertEquals(it, CaptchaRequestRoute.REMOTE, captchaRequestRoute(it, "GET", false))
+        }
+        assertEquals(CaptchaRequestRoute.REMOTE, captchaRequestRoute("https://sys.4chan.org/captcha?board=g", "POST", false))
+        listOf("http://sys.4chan.org/captcha", "file:///captcha", "intent://x", "javascript:alert(1)").forEach {
+            assertEquals(it, CaptchaRequestRoute.BLOCK, captchaRequestRoute(it, "GET", false))
+        }
     }
 
     @Test fun syntheticHtmlContractForReplyAndNewThread() {
-        assertEquals("https://boards.4chan.org/__trfl_captcha_host", CAPTCHA_HOST_URL)
         val reply = captchaHostHtml(PostingDraftKey("g", 123))
         val thread = captchaHostHtml(PostingDraftKey("g", null))
         for (html in listOf(reply, thread)) {
             assertTrue(html.contains("<div id=\"captcha\"></div>"))
-            assertTrue(html.contains("https://s.4cdn.org/js/tcaptcha.min.7.js"))
-            assertTrue(html.contains("Additional hCaptcha verification is not supported"))
+            assertTrue(html.contains(CAPTCHA_WIDGET_SCRIPT))
             assertFalse(html.contains("<form"))
             assertFalse(html.contains(".submit("))
-            assertFalse(html.contains("addJavascriptInterface"))
         }
         assertTrue(reply.contains("TCaptcha.init(document.getElementById('captcha'), 'g', 123, null, false)"))
         assertTrue(thread.contains("TCaptcha.init(document.getElementById('captcha'), 'g', 0, null, false)"))
         assertTrue(captchaHostHtml(PostingDraftKey("g", 123), true).contains("'g', 123, null, true)"))
-        assertTrue(reply.contains("#captcha { max-width: 100%; }"))
-        assertTrue(reply.contains("#js-t-ext-cnt input, #js-t-ext-cnt img"))
+    }
+
+    @Test fun syntheticWidgetStateOnlyYieldsCompletedAnswers() {
+        fun wrap(json: String) = org.json.JSONObject.quote(json)
+        val done = parseCaptchaWidgetState(wrap("""{"c":"synthetic-token","r":"0213","d":true}"""))
+        assertEquals("synthetic-token", done?.challenge)
+        assertEquals("0213", done?.response)
+        assertEquals("", parseCaptchaWidgetState(wrap("""{"c":"noop","r":"","d":true}"""))?.response)
+        listOf(null, "null", "\"\"", "garbage", wrap("""{"c":"synthetic-token","r":"02","d":false}"""),
+            wrap("""{"c":"","r":"02","d":true}"""), wrap("""{"c":"synthetic-token","r":"0 2","d":true}""")).forEach {
+            assertNull(it, parseCaptchaWidgetState(it))
+        }
     }
 }

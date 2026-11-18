@@ -33,8 +33,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 
 @OptIn(ExperimentalMaterial3Api::class)
 /**
- * Bottom reply bar for thread view. Posting is not wired yet, so [canSend] is false
- * and the send button stays inactive.
+ * Bottom reply bar for thread view. The send button is active only while [canSend] is true
+ * and the text is not blank.
  *
  * [focusRequest] changes after first composition focus the field. Set [autoFocus] when the
  * bar is first composed in response to a user action (e.g. expanding a collapsed composer),

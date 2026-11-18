@@ -8,83 +8,54 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import java.io.ByteArrayInputStream
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.delay
 
-internal enum class CaptchaErrorSource { MAIN_FRAME, WIDGET_SCRIPT, CHALLENGE, OTHER }
-internal enum class CaptchaErrorKind { WEB_VIEW, HTTP, POLICY }
-internal data class CaptchaError(val source: CaptchaErrorSource, val kind: CaptchaErrorKind, val code: Int, val detail: String? = null)
-
-@OptIn(ExperimentalMaterial3Api::class)
+/** Full-screen CAPTCHA page. Closes itself with the answer as soon as the widget reports completion. */
 @Composable
-internal fun CaptchaControl(target: PostingDraftKey) {
-    var open by remember(target) { mutableStateOf(false) }
+internal fun CaptchaPage(target: PostingDraftKey, onAnswer: (CaptchaAnswer) -> Unit, onClose: () -> Unit) {
     var attempt by remember(target) { mutableIntStateOf(0) }
-    if (!open) {
-        TextButton(onClick = { open = true }) { Text("Load CAPTCHA") }
-        return
-    }
-    var error by remember(target, attempt) { mutableStateOf<CaptchaError?>(null) }
+    var error by remember(target, attempt) { mutableStateOf<String?>(null) }
     var loading by remember(target, attempt) { mutableStateOf(true) }
-    var infoOpen by remember { mutableStateOf(false) }
-    val policyHints = remember(target, attempt) { mutableStateListOf<String>() }
-    ModalBottomSheet(onDismissRequest = { open = false }) {
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val widgetHeight = (maxHeight * 0.65f).coerceIn(200.dp, 480.dp)
-            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("CAPTCHA", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f).padding(top = 12.dp))
-                    IconButton(onClick = { open = false }) { Icon(Icons.Default.Close, contentDescription = "Close") }
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().systemBarsPadding()) {
+                Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("CAPTCHA", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onClose) { Icon(Icons.Default.Close, contentDescription = "Close") }
                 }
                 Text(
                     when {
                         error != null -> "CAPTCHA could not load."
                         loading -> "Loading CAPTCHA…"
-                        else -> "Complete the CAPTCHA below."
+                        else -> "Tap Get Captcha and solve it. You return to your post automatically."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                 )
-                if (error == null) {
-                    Spacer(Modifier.height(12.dp))
+                val failure = error
+                if (failure == null) {
                     key(target, attempt) {
-                        CaptchaWebView(target, Modifier.fillMaxWidth().height(widgetHeight),
-                            onLoaded = { loading = false }, onError = { loading = false; error = it },
-                            onPolicyHint = { if (it !in policyHints && policyHints.size < 4) policyHints.add(it) })
+                        CaptchaWebView(target, Modifier.fillMaxWidth().weight(1f),
+                            onLoaded = { loading = false }, onError = { loading = false; error = it }, onAnswer = onAnswer)
                     }
                 } else {
-                    Spacer(Modifier.height(12.dp))
-                    error?.let { Text(it.detail ?: "${it.source.name.lowercase().replace('_', ' ')}: ${it.kind.name} ${it.code}", style = MaterialTheme.typography.bodySmall) }
-                    Button(onClick = { attempt++ }) { Text("Retry") }
-                }
-                if (policyHints.isNotEmpty() && !infoOpen) {
-                    Text("CAPTCHA stuck? See About CAPTCHA.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                TextButton(onClick = { infoOpen = !infoOpen }) {
-                    Text(if (infoOpen) "Hide information" else "About CAPTCHA")
-                }
-                if (infoOpen) {
-                    if (policyHints.isNotEmpty()) {
-                        Text("If CAPTCHA is stuck, retry once and report these domains. This information stays on your device.", style = MaterialTheme.typography.bodySmall)
-                        policyHints.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
-                        TextButton(onClick = { attempt++ }) { Text("Retry") }
-                    }
-                    Text(
-                        "Cookies and the CAPTCHA ticket may remain in app storage until app data is cleared. Posting is disabled; completion is not submitted.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Text(failure, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 20.dp))
+                    Button(onClick = { attempt++ }, modifier = Modifier.padding(20.dp)) { Text("Retry") }
                 }
             }
         }
@@ -93,7 +64,7 @@ internal fun CaptchaControl(target: PostingDraftKey) {
 
 @SuppressLint("SetJavaScriptEnabled") // Required by the official interactive widget; no native JS bridge.
 @Composable
-private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded: () -> Unit, onError: (CaptchaError) -> Unit, onPolicyHint: (String) -> Unit) {
+private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded: () -> Unit, onError: (String) -> Unit, onAnswer: (CaptchaAnswer) -> Unit) {
     val darkMode = isSystemInDarkTheme()
     var webView by remember { mutableStateOf<WebView?>(null) }
     val active = remember { AtomicBoolean(true) }
@@ -104,6 +75,16 @@ private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded
             webView = null
         }
     }
+    // Poll the widget's own fields rather than exposing a bridge object to third-party scripts.
+    LaunchedEffect(Unit) {
+        while (active.get()) {
+            delay(600)
+            webView?.evaluateJavascript(CAPTCHA_STATE_JS) { raw ->
+                val answer = parseCaptchaWidgetState(raw)
+                if (answer != null && active.getAndSet(false)) onAnswer(answer)
+            }
+        }
+    }
     AndroidView(modifier = modifier, factory = { context ->
         WebView(context).apply {
             webView = this
@@ -112,57 +93,36 @@ private fun CaptchaWebView(target: PostingDraftKey, modifier: Modifier, onLoaded
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            settings.cacheMode = WebSettings.LOAD_NO_CACHE
             settings.saveFormData = false
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
             webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    if (captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame) != CaptchaRequestRoute.BLOCK) return false
-                    reportBlocked(view, request)
-                    return true
-                }
+                private fun route(request: WebResourceRequest) =
+                    captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame)
 
-                private fun reportBlocked(view: WebView, request: WebResourceRequest) {
-                    val url = request.url.toString()
-                    if (captchaBlockedImpact(url) == CaptchaBlockedImpact.FATAL) {
-                        dispatch(view) { if (active.getAndSet(false)) onError(CaptchaError(CaptchaErrorSource.OTHER, CaptchaErrorKind.POLICY, 0, "Required CAPTCHA resource blocked by app policy.")) }
-                    } else {
-                        captchaBlockedDiagnostic(url, request.method, request.isForMainFrame)?.let { hint -> dispatch(view) { onPolicyHint(hint) } }
-                    }
-                }
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+                    route(request) == CaptchaRequestRoute.BLOCK
 
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
-                    when (captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame)) {
+                    when (route(request)) {
                         CaptchaRequestRoute.HOST -> WebResourceResponse("text/html", "UTF-8", ByteArrayInputStream(captchaHostHtml(target, darkMode).toByteArray(Charsets.UTF_8)))
-                        CaptchaRequestRoute.REMOTE, CaptchaRequestRoute.INERT -> null
-                        CaptchaRequestRoute.BLOCK -> {
-                            reportBlocked(view, request)
-                            WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(byteArrayOf()))
-                        }
+                        CaptchaRequestRoute.REMOTE -> null
+                        CaptchaRequestRoute.BLOCK -> WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(byteArrayOf()))
                     }
 
                 private fun dispatch(view: WebView, callback: () -> Unit) {
                     view.post { if (active.get()) callback() }
                 }
                 override fun onPageFinished(view: WebView, url: String?) { dispatch(view, onLoaded) }
-                private fun errorSource(request: WebResourceRequest): CaptchaErrorSource? = when {
-                    request.isForMainFrame -> CaptchaErrorSource.MAIN_FRAME
-                    request.url.host == "s.4cdn.org" && request.url.path == "/js/tcaptcha.min.7.js" -> CaptchaErrorSource.WIDGET_SCRIPT
-                    request.url.host == "sys.4chan.org" -> CaptchaErrorSource.CHALLENGE
-                    else -> null
-                }
+
+                // Only the page itself and the widget script are fatal. The challenge frame may
+                // legitimately answer with an HTTP error page that carries an interactive check.
+                private fun fatal(request: WebResourceRequest) =
+                    request.isForMainFrame || request.url.toString() == CAPTCHA_WIDGET_SCRIPT
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                    val route = captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame)
-                    if (route != CaptchaRequestRoute.HOST && route != CaptchaRequestRoute.REMOTE) return
-                    val source = errorSource(request) ?: return
-                    val diagnostic = CaptchaError(source, CaptchaErrorKind.WEB_VIEW, error.errorCode)
-                    dispatch(view) { if (active.getAndSet(false)) onError(diagnostic) }
+                    if (fatal(request)) dispatch(view) { onError("Network error (${error.errorCode}). Check your connection.") }
                 }
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-                    if (captchaRequestRoute(request.url.toString(), request.method, request.isForMainFrame) != CaptchaRequestRoute.REMOTE) return
-                    val source = errorSource(request) ?: return
-                    val diagnostic = CaptchaError(source, CaptchaErrorKind.HTTP, response.statusCode, captchaRemoteHttpDiagnostic(request.url.toString(), response.statusCode))
-                    dispatch(view) { if (active.getAndSet(false)) onError(diagnostic) }
+                    if (fatal(request)) dispatch(view) { onError("CAPTCHA script unavailable (HTTP ${response.statusCode}).") }
                 }
             }
             loadUrl(CAPTCHA_HOST_URL)

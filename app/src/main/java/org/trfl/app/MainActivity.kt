@@ -410,8 +410,8 @@ private fun threadTitle(op: Post) = op.title.ifBlank { op.body.replace(Regex("\\
         if (showLurkNotice) {
             AlertDialog(
                 onDismissRequest = {},
-                title = { Text("Posting unavailable") },
-                text = { Text("Browse, watch and save threads and media. You can prepare local drafts, but posting and replying are unavailable in Trfl.") },
+                title = { Text("Posting is experimental") },
+                text = { Text("Browse, watch and save threads and media. Text replies need a CAPTCHA solved in the app. New threads and attachments are not supported yet.") },
                 confirmButton = {
                     TextButton(onClick = {
                         prefs.edit().putBoolean("lurkNoticeAcknowledged", true).apply()
@@ -447,7 +447,7 @@ private fun threadTitle(op: Post) = op.title.ifBlank { op.body.replace(Regex("\\
         bottomBar = {
         if (thread != 0L && destination == Destination.BOARDS) {
             key(board, thread) {
-                PostingComposer(PostingDraftKey(board, thread), replyQuoteId, replyFocusRequest, draftStore, onQuoteHandled = { replyQuoteId = null })
+                PostingComposer(PostingDraftKey(board, thread), replyQuoteId, replyFocusRequest, draftStore, onQuoteHandled = { replyQuoteId = null }, onPosted = ::refresh)
             }
         } else
         AnimatedVisibility(!wideLayout && showBars, enter = slideInVertically { it } + expandVertically(), exit = slideOutVertically { it } + shrinkVertically()) {
